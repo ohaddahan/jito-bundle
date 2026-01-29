@@ -1,25 +1,21 @@
 use crate::bundler::bundle::Bundle;
+use crate::client::jito_bundler::JitoBundler;
 use crate::error::JitoError;
 use crate::types::{
     JsonRpcRequest, JsonRpcResponse, SimulateBundleApiResult, SimulateBundleParams,
     SimulateBundleSummary, SimulateBundleValue,
 };
 use base64::Engine;
-use reqwest::Client;
-use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcSimulateTransactionConfig;
 use solana_sdk::commitment_config::CommitmentConfig;
 
-pub struct SimulateHelper;
-
-impl SimulateHelper {
+impl JitoBundler {
     pub async fn simulate_per_transaction<'a>(
+        &self,
         bundle: &'a Bundle<'a>,
-        rpc_client: &RpcClient,
     ) -> Result<(), JitoError> {
         for (i, tx) in bundle.versioned_transaction.iter().enumerate() {
             let sig = bs58::encode(&tx.signatures[0]).into_string();
-
             let config = RpcSimulateTransactionConfig {
                 sig_verify: true,
                 replace_recent_blockhash: false,
@@ -30,7 +26,8 @@ impl SimulateHelper {
                 encoding: None,
             };
 
-            match rpc_client
+            match self
+                .rpc_client
                 .simulate_transaction_with_config(tx, config)
                 .await
             {
@@ -58,7 +55,7 @@ impl SimulateHelper {
     }
 
     pub async fn simulate_bundle_helius(
-        client: &Client,
+        &self,
         bundle: &Bundle<'_>,
         helius_rpc_url: &str,
     ) -> Result<SimulateBundleValue, JitoError> {
@@ -81,7 +78,8 @@ impl SimulateHelper {
             method: "simulateBundle",
             params: [params],
         };
-        let response = client
+        let response = self
+            .http_client
             .post(helius_rpc_url)
             .header("Content-Type", "application/json")
             .json(&request)

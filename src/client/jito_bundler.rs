@@ -1,7 +1,6 @@
 use crate::bundler::bundle::{Bundle, BundleBuilderInputs};
 use crate::config::jito::JitoConfig;
 use crate::error::JitoError;
-use crate::simulate::SimulateHelper;
 use crate::tip::TipHelper;
 use crate::types::{BundleResult, BundleStatus, SimulateBundleValue};
 use reqwest::Client;
@@ -26,9 +25,7 @@ impl JitoBundler {
             .map_err(|e| JitoError::Network {
                 reason: format!("failed to create HTTP client: {e}"),
             })?;
-
         let rpc_client = RpcClient::new(config.rpc_url.clone());
-
         Ok(Self {
             config,
             http_client,
@@ -64,10 +61,6 @@ impl JitoBundler {
         bundle.build()
     }
 
-    pub async fn simulate<'a>(&self, bundle: &'a Bundle<'a>) -> Result<(), JitoError> {
-        SimulateHelper::simulate_per_transaction(bundle, &self.rpc_client).await
-    }
-
     pub async fn simulate_helius<'a>(
         &self,
         bundle: &'a Bundle<'a>,
@@ -79,7 +72,7 @@ impl JitoBundler {
                 .ok_or_else(|| JitoError::Network {
                     reason: "helius_rpc_url not configured".to_string(),
                 })?;
-        SimulateHelper::simulate_bundle_helius(&self.http_client, bundle, helius_url).await
+        self.simulate_bundle_helius(bundle, helius_url).await
     }
 
     pub async fn send(&self, bundle: &Bundle<'_>) -> Result<BundleResult, JitoError> {
@@ -89,8 +82,7 @@ impl JitoBundler {
 
     pub async fn send_and_confirm(&self, bundle: &Bundle<'_>) -> Result<BundleResult, JitoError> {
         if let Some(helius_url) = &self.config.helius_rpc_url
-            && let Err(e) =
-                SimulateHelper::simulate_bundle_helius(&self.http_client, bundle, helius_url).await
+            && let Err(e) = self.simulate_bundle_helius(bundle, helius_url).await
         {
             tracing::warn!("Helius simulation failed: {e}");
             return Err(e);

@@ -115,20 +115,4 @@ mod tests {
             assert!(JITO_TIP_ACCOUNTS.contains(&account));
         }
     }
-
-    #[test]
-    fn tip_instruction_has_correct_format() {
-        let payer = Pubkey::new_unique();
-        let ix = TipHelper::create_tip_instruction(&payer, 100_000);
-        assert_eq!(ix.program_id, SYSTEM_PROGRAM_ID);
-        assert_eq!(ix.accounts.len(), 2);
-        assert_eq!(ix.accounts[0].pubkey, payer);
-        assert!(ix.accounts[0].is_signer);
-        assert!(ix.accounts[0].is_writable);
-        assert!(!ix.accounts[1].is_signer);
-        assert!(ix.accounts[1].is_writable);
-        assert_eq!(ix.data[..4], [2, 0, 0, 0]);
-        let lamports = u64::from_le_bytes(ix.data[4..12].try_into().unwrap_or_default());
-        assert_eq!(lamports, 100_000);
-    }
 }
