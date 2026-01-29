@@ -1,0 +1,105 @@
+# jito-bundle — A Developer's Guide
+
+## What Is This?
+
+This is a standalone Rust library for submitting **Jito Bundles** on Solana. Think of it as a well-packaged toolkit: you hand it a set of Solana instructions, and it handles everything needed to get them executed atomically as a Jito bundle — tipping the validator, simulating the transactions, sending them across multiple endpoints, and confirming they landed on-chain.
+
+Previously, this logic lived inside the `worker-service` monolith. We extracted it into its own crate so any Solana project can use Jito bundles without pulling in an entire web service.
+
+## What Are Jito Bundles?
+
+Solana transactions normally go through the standard leader pipeline. Jito Bundles let you submit up to **5 transactions** that are guaranteed to execute **atomically and in order** — either all of them land in the same slot, or none of them do. This is critical for DeFi operations where transaction ordering matters (think: arbitrage, liquidations, or multi-step swaps).
+
+The catch: you have to **tip** the Jito validator for this privilege. The tip is a simple SOL transfer to one of 8 pre-defined Jito tip accounts.
+
+## How the Architecture Works
+
+```
+You (caller)
+    │
+    ▼
+┌────────────────┐
+│  JitoBundler   │  ← The facade — the only struct you interact with
+│                │
+│  1. fetch_tip  │  → Gets current tip floor from Jito API
+│  2. build      │  → Constructs signed transactions
+│  3. simulate   │  → Tests them against Helius/RPC
+│  4. send       │  → Submits to Jito endpoints
+│  5. confirm    │  → Polls until landed on-chain
+└────────────────┘
+```
+
+Under the hood, `JitoBundler` delegates to specialized helpers:
+
+- **TipHelper** — Picks a random tip account from the 8 Jito accounts, creates the SOL transfer instruction, and fetches the current tip floor from Jito's API so you're not overpaying or underpaying.
+
+- **BundleBuilder** — The core logic. Takes your instructions and applies all the Jito rules: prepends compute budget, handles jitodontfront (frontrun protection), places the tip correctly, validates LUT safety, and checks transaction sizes.
+
+- **SendHelper** — Encodes transactions to base64 and sends them via JSON-RPC to Jito's block engine. If one endpoint fails, it tries the next. Jito has 5 geographic endpoints (mainnet, Amsterdam, Frankfurt, New York, Tokyo).
+
+- **SimulateHelper** — Runs your bundle through simulation before sending real SOL. Supports both per-transaction RPC simulation and Helius's atomic `simulateBundle` endpoint.
+
+- **StatusHelper** — After sending, polls both the Jito API and Solana RPC to confirm your bundle actually landed. Handles rate limiting (429s), timeouts, and on-chain failures.
+
+## The Subtle Rules That Took Time to Get Right
+
+### The Separate Tip Transaction Rule
+
+Jito allows max 5 transactions per bundle. If your bundle has fewer than 5 instructions, the tip goes into its own **separate transaction** compiled **without address lookup tables**. This avoids a subtle issue where the tip account might conflict with LUT entries.
+
+If your bundle already has exactly 5 instructions (the max), there's no room for a separate tip tx, so the tip instruction gets appended to the last transaction inline.
+
+### The LUT Validation
+
+Here's a non-obvious gotcha: if any of your address lookup tables contain a Jito tip account, the transaction will **fail at runtime**. Why? Because LUT lookups produce references with different writability semantics than what the tip transfer needs. The library validates this upfront and gives you a clear error instead of letting you waste SOL on a doomed bundle.
+
+### The jitodontfront Mechanism
+
+"jitodontfront" (Jito-don't-front) is frontrun protection. When enabled, the library adds a special pubkey to the first transaction's account list as a non-signer, non-writable account. This signals to Jito validators: "don't let anyone frontrun this bundle."
+
+## Technology Choices
+
+| Choice | Why |
+|---|---|
+| `thiserror` over `anyhow` | Typed errors. Callers can match on `JitoError::TooManyTransactions` vs `JitoError::SimulationFailed` instead of parsing strings |
+| Own `SYSTEM_PROGRAM_ID` constant | `solana_sdk::system_program` is deprecated. Rather than adding `solana-system-interface`, we define the well-known pubkey directly |
+| No `jito-rust-rpc` dependency | That crate uses `anyhow`, `serde_json::Value`, old deps. The ~100 LOC of useful RPC logic was cheaper to rewrite with proper types |
+| Edition 2024 | Enables let-chains (`if let Some(x) = foo && condition {}`), which makes the bundle building code much cleaner |
+
+## Code Structure
+
+```
+src/
+├── lib.rs           Re-exports the public API
+├── config.rs        JitoConfig with builder pattern
+├── error.rs         14 typed error variants
+├── constants.rs     Tip accounts, URLs, limits
+├── types.rs         JSON-RPC types, simulation types
+├── tip.rs           Tip instruction construction + floor fetching
+├── bundle.rs        Core bundle construction logic
+├── send.rs          Bundle submission with endpoint retry
+├── simulate.rs      RPC + Helius simulation
+├── status.rs        Landing confirmation polling
+├── analysis.rs      Transaction size + LUT diagnostics
+└── bundler.rs       JitoBundler facade (the main entry point)
+```
+
+## Bugs We Ran Into
+
+1. **`thiserror` source field magic**: Fields named `source` in `thiserror` enums get auto-treated as `#[source]`, but `String` doesn't implement `std::error::Error`. Renamed to `reason` everywhere.
+
+2. **Solana crate version fragmentation**: You can't just write `solana-sdk = "2.3"` and expect everything to resolve. Different Solana crates have different latest 2.x versions: `solana-pubkey` is at 2.4.0, `solana-compute-budget-interface` is at 2.2.2. Pin exact versions.
+
+3. **`allow_attributes = "deny"` strictness**: Our lint config denies all `#[allow(...)]` attributes. When we needed a float-to-u64 cast, we couldn't just `#[allow(cast_sign_loss)]` — we had to write explicit conditional logic to handle NaN/negative values.
+
+4. **Deprecated `system_program` module**: Caught by a deprecation warning. The fix was defining our own `SYSTEM_PROGRAM_ID` constant via the `pubkey!` macro rather than pulling in yet another crate.
+
+## How Good Engineers Think About This
+
+- **Facade pattern**: `JitoBundler` presents a simple API while hiding the complexity of 6 specialized helpers. Users don't need to know about endpoint rotation or simulation strategies.
+
+- **Typed errors over string errors**: Every failure mode has its own variant. This means you can write `match err { JitoError::ConfirmationTimeout { .. } => retry(), _ => fail() }` instead of `if err.to_string().contains("timeout")`.
+
+- **Fail-fast validation**: Bundle size, LUT safety, and transaction size are all checked before any network calls. You find out about structural problems immediately, not after waiting for a failed simulation.
+
+- **Defense in depth**: Even though we validate LUTs upfront, we still log comprehensive diagnostics when anything fails downstream. The `TransactionAnalysis` module exists purely for debugging — when a compilation or simulation fails, it tells you exactly which accounts weren't in your LUTs and which transactions were oversized.
