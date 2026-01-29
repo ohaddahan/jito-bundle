@@ -9,10 +9,7 @@ use reqwest::Client;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
 use solana_sdk::hash::Hash;
-use solana_sdk::message::{VersionedMessage, v0};
-use solana_sdk::signature::Signer;
 use solana_sdk::signer::keypair::Keypair;
-use solana_sdk::transaction::VersionedTransaction;
 
 pub struct TipHelper;
 
@@ -20,11 +17,6 @@ impl TipHelper {
     pub fn get_random_tip_account() -> Pubkey {
         let index = rand::rng().random_range(0..JITO_TIP_ACCOUNTS.len());
         JITO_TIP_ACCOUNTS[index]
-    }
-
-    pub fn create_tip_instruction(payer: &Pubkey, tip_lamports: u64) -> Instruction {
-        let tip_account = Self::get_random_tip_account();
-        Self::create_tip_instruction_to(payer, &tip_account, tip_lamports)
     }
 
     pub fn create_tip_instruction_to(
@@ -42,32 +34,6 @@ impl TipHelper {
             ],
             data,
         }
-    }
-
-    pub fn compile_tip_transaction(
-        input: CompileTipTransactionInput<'_>,
-    ) -> Result<VersionedTransaction, JitoError> {
-        let CompileTipTransactionInput {
-            keypair,
-            tip_lamports,
-            recent_blockhash,
-            tip_account,
-        } = input;
-
-        let tip_ix = Self::create_tip_instruction_to(&keypair.pubkey(), tip_account, tip_lamports);
-
-        let message = v0::Message::try_compile(&keypair.pubkey(), &[tip_ix], &[], recent_blockhash)
-            .map_err(|e| JitoError::MessageCompileFailed {
-                index: 0,
-                reason: e.to_string(),
-            })?;
-
-        VersionedTransaction::try_new(VersionedMessage::V0(message), &[keypair]).map_err(|e| {
-            JitoError::TransactionCreationFailed {
-                index: 0,
-                reason: e.to_string(),
-            }
-        })
     }
 
     pub async fn fetch_tip_floor(

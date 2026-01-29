@@ -132,13 +132,20 @@ impl<'a> Bundle<'a> {
                 reason: e.to_string(),
             }
         })?;
-
-        VersionedTransaction::try_new(VersionedMessage::V0(message), &[self.payer]).map_err(|e| {
-            JitoError::TransactionCreationFailed {
+        let txn = VersionedTransaction::try_new(VersionedMessage::V0(message), &[self.payer])
+            .map_err(|e| JitoError::TransactionCreationFailed {
                 index,
                 reason: e.to_string(),
-            }
-        })
+            })?;
+        let size_info = TransactionAnalysis::analyze_transaction_size(&txn);
+        if size_info.is_oversized {
+            return Err(JitoError::TransactionOversized {
+                index,
+                size: size_info.size,
+                max: size_info.max_size,
+            });
+        }
+        Ok(txn)
     }
 
     pub fn build(mut self) -> Result<Self, JitoError> {
@@ -159,11 +166,12 @@ impl<'a> Bundle<'a> {
         }
 
         let total = self.transactions.len();
+        let mut versioned = Vec::with_capacity(total);
         for index in 0..total {
-            let txn =
-                self.build_versioned_transaction(index, total, &self.transactions[index].clone())?;
-            self.versioned_transaction.push(txn);
+            let txn = self.build_versioned_transaction(index, total, &self.transactions[index])?;
+            versioned.push(txn);
         }
+        self.versioned_transaction = versioned;
 
         if !self.last_txn_is_tip {
             Self::validate_tip_not_in_luts(&self.tip_account, self.lookup_tables)?;
