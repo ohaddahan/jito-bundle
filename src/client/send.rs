@@ -5,7 +5,6 @@ use crate::error::JitoError;
 use crate::types::{BundleResult, JsonRpcRequest, JsonRpcResponse};
 use base64::Engine;
 use rand::Rng;
-use reqwest::Client;
 use serde::Serialize;
 use solana_sdk::transaction::VersionedTransaction;
 
@@ -48,18 +47,14 @@ impl JitoBundler {
             .collect()
     }
 
-    pub async fn send_bundle(
-        client: &Client,
-        bundle: &Bundle<'_>,
-        base_url: &str,
-    ) -> Result<BundleResult, JitoError> {
+    pub async fn send_bundle(&self, bundle: &Bundle<'_>) -> Result<BundleResult, JitoError> {
+        let base_url = self.config.network.block_engine_url();
         let encoded_txs = Self::encode_transactions(&bundle.versioned_transaction)?;
         let signatures = Self::extract_signatures(&bundle.versioned_transaction);
         let endpoints = Self::get_endpoints(base_url);
         let mut last_error = String::from("no endpoints available");
-
         for endpoint in &endpoints {
-            match Self::send_bundle_to_endpoint(client, endpoint, &encoded_txs).await {
+            match self.send_bundle_to_endpoint(endpoint, &encoded_txs).await {
                 Ok(bundle_id) => {
                     let explorer_url = Self::get_jito_explorer_url(&bundle_id);
                     return Ok(BundleResult {
@@ -84,7 +79,7 @@ impl JitoBundler {
     }
 
     async fn send_bundle_to_endpoint(
-        client: &Client,
+        &self,
         endpoint: &str,
         encoded_txs: &[String],
     ) -> Result<String, JitoError> {
@@ -105,8 +100,8 @@ impl JitoBundler {
                 },
             ),
         };
-
-        let response = client
+        let response = self
+            .http_client
             .post(endpoint)
             .header("Content-Type", "application/json")
             .json(&request)

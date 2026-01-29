@@ -75,11 +75,6 @@ impl JitoBundler {
         self.simulate_bundle_helius(bundle, helius_url).await
     }
 
-    pub async fn send(&self, bundle: &Bundle<'_>) -> Result<BundleResult, JitoError> {
-        let base_url = self.config.network.block_engine_url();
-        Self::send_bundle(&self.http_client, bundle, base_url).await
-    }
-
     pub async fn send_and_confirm(&self, bundle: &Bundle<'_>) -> Result<BundleResult, JitoError> {
         if let Some(helius_url) = &self.config.helius_rpc_url
             && let Err(e) = self.simulate_bundle_helius(bundle, helius_url).await
@@ -87,7 +82,7 @@ impl JitoBundler {
             tracing::warn!("Helius simulation failed: {e}");
             return Err(e);
         }
-        let result = self.send(bundle).await?;
+        let result = self.send_bundle(bundle).await?;
         tracing::info!(
             "bundle submitted: bundle_id={:?}, signatures={:?}, explorer={:?}",
             result.bundle_id,
