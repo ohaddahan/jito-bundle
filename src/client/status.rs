@@ -1,3 +1,4 @@
+use crate::client::jito_bundler::JitoBundler;
 use crate::constants::DEFAULT_INITIAL_CONFIRM_DELAY_SECS;
 use crate::error::JitoError;
 use crate::types::{BundleStatus, JsonRpcRequest, JsonRpcResponse};
@@ -9,9 +10,7 @@ use solana_transaction_status_client_types::TransactionConfirmationStatus;
 use std::str::FromStr;
 use std::time::Duration;
 
-pub struct StatusHelper;
-
-impl StatusHelper {
+impl JitoBundler {
     pub async fn get_bundle_status(
         client: &Client,
         endpoint: &str,

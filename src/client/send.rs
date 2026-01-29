@@ -1,3 +1,5 @@
+use crate::bundler::bundle::Bundle;
+use crate::client::jito_bundler::JitoBundler;
 use crate::constants::{JITO_EXPLORER_URL, JITO_MAINNET_ENDPOINTS};
 use crate::error::JitoError;
 use crate::types::{BundleResult, JsonRpcRequest, JsonRpcResponse};
@@ -7,9 +9,7 @@ use reqwest::Client;
 use serde::Serialize;
 use solana_sdk::transaction::VersionedTransaction;
 
-pub struct SendHelper;
-
-impl SendHelper {
+impl JitoBundler {
     pub fn get_endpoints(base_url: &str) -> Vec<String> {
         JITO_MAINNET_ENDPOINTS
             .iter()
@@ -50,11 +50,11 @@ impl SendHelper {
 
     pub async fn send_bundle(
         client: &Client,
-        transactions: &[VersionedTransaction],
+        bundle: &Bundle<'_>,
         base_url: &str,
     ) -> Result<BundleResult, JitoError> {
-        let encoded_txs = Self::encode_transactions(transactions)?;
-        let signatures = Self::extract_signatures(transactions);
+        let encoded_txs = Self::encode_transactions(&bundle.versioned_transaction)?;
+        let signatures = Self::extract_signatures(&bundle.versioned_transaction);
         let endpoints = Self::get_endpoints(base_url);
         let mut last_error = String::from("no endpoints available");
 

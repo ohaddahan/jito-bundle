@@ -1,3 +1,4 @@
+use crate::bundler::bundle::Bundle;
 use crate::error::JitoError;
 use crate::types::{
     JsonRpcRequest, JsonRpcResponse, SimulateBundleApiResult, SimulateBundleParams,
@@ -8,16 +9,15 @@ use reqwest::Client;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcSimulateTransactionConfig;
 use solana_sdk::commitment_config::CommitmentConfig;
-use solana_sdk::transaction::VersionedTransaction;
 
 pub struct SimulateHelper;
 
 impl SimulateHelper {
-    pub async fn simulate_per_transaction(
-        transactions: &[VersionedTransaction],
+    pub async fn simulate_per_transaction<'a>(
+        bundle: &'a Bundle<'a>,
         rpc_client: &RpcClient,
     ) -> Result<(), JitoError> {
-        for (i, tx) in transactions.iter().enumerate() {
+        for (i, tx) in bundle.versioned_transaction.iter().enumerate() {
             let sig = bs58::encode(&tx.signatures[0]).into_string();
 
             let config = RpcSimulateTransactionConfig {
@@ -59,10 +59,11 @@ impl SimulateHelper {
 
     pub async fn simulate_bundle_helius(
         client: &Client,
-        transactions: &[VersionedTransaction],
+        bundle: &Bundle<'_>,
         helius_rpc_url: &str,
     ) -> Result<SimulateBundleValue, JitoError> {
-        let encoded_transactions: Vec<String> = transactions
+        let encoded_transactions: Vec<String> = bundle
+            .versioned_transaction
             .iter()
             .map(|tx| {
                 let serialized = bincode::serialize(tx).map_err(|e| JitoError::Serialization {
@@ -71,18 +72,15 @@ impl SimulateHelper {
                 Ok(base64::engine::general_purpose::STANDARD.encode(serialized))
             })
             .collect::<Result<Vec<String>, JitoError>>()?;
-
         let params = SimulateBundleParams {
             encoded_transactions,
         };
-
         let request = JsonRpcRequest {
             jsonrpc: "2.0",
             id: 1,
             method: "simulateBundle",
             params: [params],
         };
-
         let response = client
             .post(helius_rpc_url)
             .header("Content-Type", "application/json")
@@ -92,25 +90,21 @@ impl SimulateHelper {
             .map_err(|e| JitoError::Network {
                 reason: format!("Helius simulateBundle: {e}"),
             })?;
-
         let status = response.status();
         let response_text = response.text().await.map_err(|e| JitoError::Network {
             reason: format!("failed to read Helius response: {e}"),
         })?;
-
         if !status.is_success() {
             return Err(JitoError::Network {
                 reason: format!("Helius simulateBundle HTTP {status}: {response_text}"),
             });
         }
-
         let parsed: JsonRpcResponse<SimulateBundleApiResult> = serde_json::from_str(&response_text)
             .map_err(|e| JitoError::Serialization {
                 reason: format!(
                     "failed to parse Helius simulateBundle response: {e}, body: {response_text}"
                 ),
             })?;
-
         if let Some(error) = parsed.error {
             return Err(JitoError::JsonRpc {
                 code: error.code,
@@ -124,7 +118,7 @@ impl SimulateHelper {
         })?;
 
         if let SimulateBundleSummary::Failed(failure) = &result.value.summary {
-            let tx_count = transactions.len();
+            let tx_count = bundle.versioned_transaction.len();
             let results_count = result.value.transaction_results.len();
             let failed_tx_index = if results_count < tx_count {
                 results_count
@@ -136,7 +130,6 @@ impl SimulateHelper {
                     .position(|r| r.err.is_some())
                     .unwrap_or(0)
             };
-
             let mut error_details = format!(
                 "bundle simulation failed at transaction {failed_tx_index}: {}\n\
                  failing tx signature: {:?}\n\

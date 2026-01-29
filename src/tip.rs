@@ -1,4 +1,4 @@
-use crate::config::TipStrategy;
+use crate::config::tip_strategy::TipStrategy;
 use crate::constants::{
     DEFAULT_TIP_LAMPORTS, JITO_TIP_ACCOUNTS, MAX_TIP_LAMPORTS, SYSTEM_PROGRAM_ID,
 };

@@ -1,9 +1,7 @@
-use crate::bundle::{BuildBundleInput, BundleBuilder};
-use crate::config::JitoConfig;
+use crate::bundler::bundle::{Bundle, BundleBuilderInputs};
+use crate::config::jito::JitoConfig;
 use crate::error::JitoError;
-use crate::send::SendHelper;
 use crate::simulate::SimulateHelper;
-use crate::status::StatusHelper;
 use crate::tip::TipHelper;
 use crate::types::{BundleResult, BundleStatus, SimulateBundleValue};
 use reqwest::Client;
@@ -12,7 +10,6 @@ use solana_instruction::Instruction;
 use solana_sdk::address_lookup_table::AddressLookupTableAccount;
 use solana_sdk::hash::Hash;
 use solana_sdk::signer::keypair::Keypair;
-use solana_sdk::transaction::VersionedTransaction;
 use std::time::Duration;
 
 pub struct JitoBundler {
@@ -44,36 +41,36 @@ impl JitoBundler {
         TipHelper::resolve_tip(&self.http_client, tip_floor_url, &self.config.tip_strategy).await
     }
 
-    pub fn build_bundle(
-        &self,
-        input: BuildBundleOptions<'_>,
-    ) -> Result<Vec<VersionedTransaction>, JitoError> {
+    pub fn build_bundle<'a>(
+        &'a self,
+        input: BuildBundleOptions<'a>,
+    ) -> Result<Bundle<'a>, JitoError> {
         let BuildBundleOptions {
             payer,
-            instructions,
+            transactions,
             lookup_tables,
             recent_blockhash,
             tip_lamports,
         } = input;
-
-        BundleBuilder::build(BuildBundleInput {
+        let bundle = Bundle::new(BundleBuilderInputs {
             payer,
-            instructions,
+            transactions,
             lookup_tables,
             recent_blockhash,
             tip_lamports,
             jitodontfront_pubkey: self.config.jitodontfront_pubkey.as_ref(),
             compute_unit_limit: self.config.compute_unit_limit,
-        })
+        });
+        bundle.build()
     }
 
-    pub async fn simulate(&self, transactions: &[VersionedTransaction]) -> Result<(), JitoError> {
-        SimulateHelper::simulate_per_transaction(transactions, &self.rpc_client).await
+    pub async fn simulate<'a>(&self, bundle: &'a Bundle<'a>) -> Result<(), JitoError> {
+        SimulateHelper::simulate_per_transaction(bundle, &self.rpc_client).await
     }
 
-    pub async fn simulate_helius(
+    pub async fn simulate_helius<'a>(
         &self,
-        transactions: &[VersionedTransaction],
+        bundle: &'a Bundle<'a>,
     ) -> Result<SimulateBundleValue, JitoError> {
         let helius_url =
             self.config
@@ -82,65 +79,36 @@ impl JitoBundler {
                 .ok_or_else(|| JitoError::Network {
                     reason: "helius_rpc_url not configured".to_string(),
                 })?;
-
-        SimulateHelper::simulate_bundle_helius(&self.http_client, transactions, helius_url).await
+        SimulateHelper::simulate_bundle_helius(&self.http_client, bundle, helius_url).await
     }
 
-    pub async fn send(
-        &self,
-        transactions: &[VersionedTransaction],
-    ) -> Result<BundleResult, JitoError> {
+    pub async fn send(&self, bundle: &Bundle<'_>) -> Result<BundleResult, JitoError> {
         let base_url = self.config.network.block_engine_url();
-        SendHelper::send_bundle(&self.http_client, transactions, base_url).await
+        Self::send_bundle(&self.http_client, bundle, base_url).await
     }
 
-    pub async fn send_and_confirm(
-        &self,
-        input: SendAndConfirmInput<'_>,
-    ) -> Result<BundleResult, JitoError> {
-        let SendAndConfirmInput {
-            payer,
-            instructions,
-            lookup_tables,
-            recent_blockhash,
-        } = input;
-
-        let tip_lamports = self.fetch_tip().await?;
-
-        let transactions = self.build_bundle(BuildBundleOptions {
-            payer,
-            instructions,
-            lookup_tables,
-            recent_blockhash,
-            tip_lamports,
-        })?;
-
+    pub async fn send_and_confirm(&self, bundle: &Bundle<'_>) -> Result<BundleResult, JitoError> {
         if let Some(helius_url) = &self.config.helius_rpc_url
             && let Err(e) =
-                SimulateHelper::simulate_bundle_helius(&self.http_client, &transactions, helius_url)
-                    .await
+                SimulateHelper::simulate_bundle_helius(&self.http_client, bundle, helius_url).await
         {
             tracing::warn!("Helius simulation failed: {e}");
             return Err(e);
         }
-
-        let result = self.send(&transactions).await?;
-
+        let result = self.send(bundle).await?;
         tracing::info!(
             "bundle submitted: bundle_id={:?}, signatures={:?}, explorer={:?}",
             result.bundle_id,
             result.signatures,
             result.explorer_url
         );
-
-        let status = StatusHelper::wait_for_landing_on_chain(
+        let status = JitoBundler::wait_for_landing_on_chain(
             &result.signatures,
             &self.rpc_client,
             self.config.confirm_policy.max_attempts,
             self.config.confirm_policy.interval_ms,
         )
         .await;
-
         match status {
             Ok(BundleStatus::Landed { .. }) => Ok(result),
             Ok(BundleStatus::Failed { error }) => {
@@ -157,15 +125,8 @@ impl JitoBundler {
 
 pub struct BuildBundleOptions<'a> {
     pub payer: &'a Keypair,
-    pub instructions: Vec<Instruction>,
+    pub transactions: Vec<Vec<Instruction>>,
     pub lookup_tables: &'a [AddressLookupTableAccount],
     pub recent_blockhash: Hash,
     pub tip_lamports: u64,
-}
-
-pub struct SendAndConfirmInput<'a> {
-    pub payer: &'a Keypair,
-    pub instructions: Vec<Instruction>,
-    pub lookup_tables: &'a [AddressLookupTableAccount],
-    pub recent_blockhash: Hash,
 }

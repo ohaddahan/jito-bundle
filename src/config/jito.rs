@@ -1,66 +1,8 @@
-use crate::constants::{
-    DEFAULT_COMPUTE_UNIT_LIMIT, DEFAULT_CONFIRM_INTERVAL_MS, DEFAULT_MAX_CONFIRM_ATTEMPTS,
-    DEFAULT_TIP_LAMPORTS, JITO_BLOCK_ENGINE_URL, JITO_TIPS_FLOOR_URL, MAX_TIP_LAMPORTS,
-};
+use crate::config::confirm_policy::ConfirmPolicy;
+use crate::config::network::Network;
+use crate::config::tip_strategy::TipStrategy;
+use crate::constants::DEFAULT_COMPUTE_UNIT_LIMIT;
 use solana_pubkey::Pubkey;
-
-#[derive(Debug, Clone)]
-pub enum Network {
-    Mainnet,
-    Custom {
-        block_engine_url: String,
-        tip_floor_url: String,
-    },
-}
-
-impl Network {
-    pub fn block_engine_url(&self) -> &str {
-        match self {
-            Network::Mainnet => JITO_BLOCK_ENGINE_URL,
-            Network::Custom {
-                block_engine_url, ..
-            } => block_engine_url,
-        }
-    }
-
-    pub fn tip_floor_url(&self) -> &str {
-        match self {
-            Network::Mainnet => JITO_TIPS_FLOOR_URL,
-            Network::Custom { tip_floor_url, .. } => tip_floor_url,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum TipStrategy {
-    Fixed(u64),
-    FetchFloor,
-    FetchFloorWithCap { min: u64, max: u64 },
-}
-
-impl Default for TipStrategy {
-    fn default() -> Self {
-        TipStrategy::FetchFloorWithCap {
-            min: DEFAULT_TIP_LAMPORTS,
-            max: MAX_TIP_LAMPORTS,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ConfirmPolicy {
-    pub max_attempts: u32,
-    pub interval_ms: u64,
-}
-
-impl Default for ConfirmPolicy {
-    fn default() -> Self {
-        Self {
-            max_attempts: DEFAULT_MAX_CONFIRM_ATTEMPTS,
-            interval_ms: DEFAULT_CONFIRM_INTERVAL_MS,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct JitoConfig {
