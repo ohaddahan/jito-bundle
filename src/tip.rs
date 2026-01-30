@@ -8,8 +8,6 @@ use rand::Rng;
 use reqwest::Client;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::Pubkey;
-use solana_sdk::hash::Hash;
-use solana_sdk::signer::keypair::Keypair;
 
 pub struct TipHelper;
 
@@ -95,13 +93,6 @@ impl TipHelper {
             }
         }
     }
-}
-
-pub struct CompileTipTransactionInput<'a> {
-    pub keypair: &'a Keypair,
-    pub tip_lamports: u64,
-    pub recent_blockhash: Hash,
-    pub tip_account: &'a Pubkey,
 }
 
 #[cfg(test)]
