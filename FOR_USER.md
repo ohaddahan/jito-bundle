@@ -29,17 +29,19 @@ You (caller)
 └────────────────┘
 ```
 
-Under the hood, `JitoBundler` delegates to specialized helpers:
+Under the hood, `JitoBundler` is the single struct that owns all resources (HTTP client, RPC client, config). Its implementation is **split across multiple files** — each file adds a group of related methods via separate `impl JitoBundler` blocks. Two standalone helpers also exist:
 
-- **TipHelper** — Picks a random tip account from the 8 Jito accounts, creates the SOL transfer instruction, and fetches the current tip floor from Jito's API so you're not overpaying or underpaying.
+- **TipHelper** (`tip.rs`) — Picks a random tip account from the 8 Jito accounts, creates the SOL transfer instruction, and fetches the current tip floor from Jito's API so you're not overpaying or underpaying.
 
-- **BundleBuilder** — The core logic. Takes your instructions and applies all the Jito rules: prepends compute budget, handles jitodontfront (frontrun protection), places the tip correctly, validates LUT safety, and checks transaction sizes.
+- **BundleBuilder** (`bundle.rs`) — The core logic. Takes your instructions and applies all the Jito rules: prepends compute budget, handles jitodontfront (frontrun protection), places the tip correctly, validates LUT safety, and checks transaction sizes.
 
-- **SendHelper** — Encodes transactions to base64 and sends them via JSON-RPC to Jito's block engine. If one endpoint fails, it tries the next. Jito has 5 geographic endpoints (mainnet, Amsterdam, Frankfurt, New York, Tokyo).
+- **Send methods** (`send.rs`) — `impl JitoBundler` methods that encode transactions to base64 and send them via JSON-RPC to Jito's block engine. If one endpoint fails, it tries the next. Jito has 5 geographic endpoints (mainnet, Amsterdam, Frankfurt, New York, Tokyo).
 
-- **SimulateHelper** — Runs your bundle through simulation before sending real SOL. Supports both per-transaction RPC simulation and Helius's atomic `simulateBundle` endpoint.
+- **Simulate methods** (`simulate.rs`) — `impl JitoBundler` methods that run your bundle through simulation before sending real SOL. Supports both per-transaction RPC simulation and Helius's atomic `simulateBundle` endpoint.
 
-- **StatusHelper** — After sending, polls both the Jito API and Solana RPC to confirm your bundle actually landed. Handles rate limiting (429s), timeouts, and on-chain failures.
+- **Status methods** (`status.rs`) — `impl JitoBundler` methods that poll both the Jito API and Solana RPC to confirm your bundle actually landed. Handles rate limiting (429s), timeouts, and on-chain failures.
+
+This "split impl" pattern keeps each file focused on one concern while keeping all state access through `&self` — no passing around raw clients or config structs.
 
 ## The Subtle Rules That Took Time to Get Right
 
@@ -71,18 +73,22 @@ Here's a non-obvious gotcha: if any of your address lookup tables contain a Jito
 ```
 src/
 ├── lib.rs           Re-exports the public API
-├── config.rs        JitoConfig with builder pattern
+├── config/          JitoConfig, Network, TipStrategy, ConfirmPolicy
 ├── error.rs         14 typed error variants
 ├── constants.rs     Tip accounts, URLs, limits
 ├── types.rs         JSON-RPC types, simulation types
-├── tip.rs           Tip instruction construction + floor fetching
-├── bundle.rs        Core bundle construction logic
-├── send.rs          Bundle submission with endpoint retry
-├── simulate.rs      RPC + Helius simulation
-├── status.rs        Landing confirmation polling
-├── analysis.rs      Transaction size + LUT diagnostics
-└── bundler.rs       JitoBundler facade (the main entry point)
+├── tip.rs           TipHelper (standalone helper)
+├── bundler/
+│   └── bundle.rs    BundleBuilder (standalone helper)
+├── client/
+│   ├── jito_bundler.rs  JitoBundler struct + facade methods (new, build, send_and_confirm)
+│   ├── send.rs          impl JitoBundler — bundle submission with endpoint retry
+│   ├── simulate.rs      impl JitoBundler — RPC + Helius simulation
+│   └── status.rs        impl JitoBundler — landing confirmation polling
+└── analysis.rs      Transaction size + LUT diagnostics
 ```
+
+Notice how `send.rs`, `simulate.rs`, and `status.rs` all add methods to the same `JitoBundler` struct via split `impl` blocks. This keeps files small and focused while keeping all resource access through `&self`.
 
 ## Bugs We Ran Into
 
@@ -96,10 +102,14 @@ src/
 
 ## How Good Engineers Think About This
 
-- **Facade pattern**: `JitoBundler` presents a simple API while hiding the complexity of 6 specialized helpers. Users don't need to know about endpoint rotation or simulation strategies.
+- **Facade pattern**: `JitoBundler` presents a simple API while hiding the complexity of sending, simulating, and confirming bundles. Users don't need to know about endpoint rotation or simulation strategies.
 
 - **Typed errors over string errors**: Every failure mode has its own variant. This means you can write `match err { JitoError::ConfirmationTimeout { .. } => retry(), _ => fail() }` instead of `if err.to_string().contains("timeout")`.
 
 - **Fail-fast validation**: Bundle size, LUT safety, and transaction size are all checked before any network calls. You find out about structural problems immediately, not after waiting for a failed simulation.
 
 - **Defense in depth**: Even though we validate LUTs upfront, we still log comprehensive diagnostics when anything fails downstream. The `TransactionAnalysis` module exists purely for debugging — when a compilation or simulation fails, it tells you exactly which accounts weren't in your LUTs and which transactions were oversized.
+
+- **Split impl blocks**: Rust lets you write `impl MyStruct` in multiple files. We use this to keep `JitoBundler`'s implementation organized by concern — sending, simulating, and status polling each live in their own file, but all access the struct's owned resources through `&self`. This avoids the anti-pattern of passing raw clients and config through static method parameters.
+
+- **Flat flow methods**: The top-level `send_and_confirm` reads like a recipe: simulate → send → log → wait → interpret. Each step is a single named call. Interpretation logic (the match on landing status) is extracted into a private helper so the orchestrating method stays scannable without scrolling.

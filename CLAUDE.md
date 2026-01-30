@@ -11,9 +11,9 @@ Standalone Rust library for submitting Jito Bundles on Solana.
 - `types.rs` — JSON-RPC request/response types, `BundleStatus`, simulation types
 - `tip.rs` — `TipHelper` (random tip account, create tip ix, compile tip tx, fetch floor)
 - `bundle.rs` — `BundleBuilder::build()` (the core bundle construction logic)
-- `send.rs` — `SendHelper` (encode txs, retry across 5 geographic endpoints)
-- `simulate.rs` — `SimulateHelper` (per-tx RPC + Helius atomic simulation)
-- `status.rs` — `JitoBundler` instance methods (poll bundle status + on-chain confirmation via `&self`)
+- `send.rs` — `JitoBundler` instance methods (encode txs, retry across 5 geographic endpoints)
+- `simulate.rs` — `JitoBundler` instance methods (per-tx RPC + Helius atomic simulation)
+- `status.rs` — `JitoBundler` instance methods (poll bundle status + on-chain confirmation)
 - `analysis.rs` — `TransactionAnalysis` (size checks, LUT coverage diagnostics)
 - `bundler.rs` — `JitoBundler` (high-level facade owning HTTP + RPC clients)
 
@@ -45,8 +45,10 @@ Error: `thiserror 2`, Async: `tokio 1` (time), Logging: `tracing 0.1`, Random: `
 
 ## Testing
 
-- Unit tests in `tip.rs` and `bundle.rs` (7 tests)
-- Integration tests require `.env` with keypair, RPC URL, Helius URL (run with `cargo test -- --ignored`)
+- Unit tests in `tip.rs` (1 test) and `bundle.rs` (15 tests covering jitodontfront, tx count/coverage, bundle size validation, transaction size, and tip scenarios)
+- Integration tests in `tests/integration.rs` (2 tests: `build_memo_bundle_succeeds`, `simulate_memo_bundle_on_helius`) — require `.env` with `KEYPAIR_PATH`, `RPC_URL`, and optionally `HELIUS_RPC_URL`
+- Run unit tests: `cargo test`
+- Run integration tests: `cargo test -- --ignored`
 
 ## See Also
 
