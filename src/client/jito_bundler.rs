@@ -61,9 +61,9 @@ impl JitoBundler {
         bundle.build()
     }
 
-    pub async fn simulate_helius<'a>(
+    pub async fn simulate_helius(
         &self,
-        bundle: &'a Bundle<'a>,
+        bundle: &Bundle<'_>,
     ) -> Result<SimulateBundleValue, JitoError> {
         let helius_url =
             self.config
@@ -89,21 +89,23 @@ impl JitoBundler {
             result.signatures,
             result.explorer_url
         );
-        let status = JitoBundler::wait_for_landing_on_chain(
-            &result.signatures,
-            &self.rpc_client,
-            self.config.confirm_policy.max_attempts,
-            self.config.confirm_policy.interval_ms,
-        )
-        .await;
+        let status = self.wait_for_landing_on_chain(&result.signatures).await;
+        Self::interpret_landing_status(status, self.config.confirm_policy.max_attempts)?;
+        Ok(result)
+    }
+
+    fn interpret_landing_status(
+        status: Result<BundleStatus, JitoError>,
+        max_attempts: u32,
+    ) -> Result<(), JitoError> {
         match status {
-            Ok(BundleStatus::Landed { .. }) => Ok(result),
+            Ok(BundleStatus::Landed { .. }) => Ok(()),
             Ok(BundleStatus::Failed { error }) => {
                 let reason = error.unwrap_or_else(|| "unknown error".to_string());
                 Err(JitoError::OnChainFailure { reason })
             }
             Ok(_) => Err(JitoError::ConfirmationTimeout {
-                attempts: self.config.confirm_policy.max_attempts,
+                attempts: max_attempts,
             }),
             Err(e) => Err(e),
         }

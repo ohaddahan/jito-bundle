@@ -10,10 +10,7 @@ use solana_client::rpc_config::RpcSimulateTransactionConfig;
 use solana_sdk::commitment_config::CommitmentConfig;
 
 impl JitoBundler {
-    pub async fn simulate_per_transaction<'a>(
-        &self,
-        bundle: &'a Bundle<'a>,
-    ) -> Result<(), JitoError> {
+    pub async fn simulate_per_transaction(&self, bundle: &Bundle<'_>) -> Result<(), JitoError> {
         for (i, tx) in bundle.versioned_transaction.iter().enumerate() {
             let sig = bs58::encode(&tx.signatures[0]).into_string();
             let config = RpcSimulateTransactionConfig {

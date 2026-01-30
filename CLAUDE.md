@@ -13,7 +13,7 @@ Standalone Rust library for submitting Jito Bundles on Solana.
 - `bundle.rs` — `BundleBuilder::build()` (the core bundle construction logic)
 - `send.rs` — `SendHelper` (encode txs, retry across 5 geographic endpoints)
 - `simulate.rs` — `SimulateHelper` (per-tx RPC + Helius atomic simulation)
-- `status.rs` — `StatusHelper` (poll bundle status + on-chain confirmation)
+- `status.rs` — `JitoBundler` instance methods (poll bundle status + on-chain confirmation via `&self`)
 - `analysis.rs` — `TransactionAnalysis` (size checks, LUT coverage diagnostics)
 - `bundler.rs` — `JitoBundler` (high-level facade owning HTTP + RPC clients)
 
@@ -35,6 +35,7 @@ Standalone Rust library for submitting Jito Bundles on Solana.
 - Edition 2024 enables let-chains (`if let Some(x) = foo && condition { ... }`)
 - Solana crate versions are fragmented: `solana-sdk 2.3.1`, `solana-pubkey 2.4.0`, `solana-compute-budget-interface 2.2.2` — pin exact versions
 - `unwrap_or_default()` is fine under `unwrap_used = "deny"` — it's a different method
+- `status.rs`, `send.rs`, `simulate.rs` all impl methods on `JitoBundler` (split impl blocks across files). Methods that use owned resources (`http_client`, `rpc_client`, `config`) must be `&self` instance methods, not static methods taking those resources as parameters.
 
 ## Dependencies
 

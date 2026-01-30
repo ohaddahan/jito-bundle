@@ -4,7 +4,6 @@ use crate::constants::{JITO_EXPLORER_URL, JITO_MAINNET_ENDPOINTS};
 use crate::error::JitoError;
 use crate::types::{BundleResult, JsonRpcRequest, JsonRpcResponse};
 use base64::Engine;
-use rand::Rng;
 use serde::Serialize;
 use solana_sdk::transaction::VersionedTransaction;
 
@@ -14,12 +13,6 @@ impl JitoBundler {
             .iter()
             .map(|endpoint| format!("{base_url}?endpoint={endpoint}"))
             .collect()
-    }
-
-    pub fn get_random_endpoint(base_url: &str) -> String {
-        let endpoints = Self::get_endpoints(base_url);
-        let index = rand::rng().random_range(0..endpoints.len());
-        endpoints[index].clone()
     }
 
     pub fn get_jito_explorer_url(bundle_id: &str) -> String {

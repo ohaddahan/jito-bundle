@@ -2,20 +2,15 @@ use crate::client::jito_bundler::JitoBundler;
 use crate::constants::DEFAULT_INITIAL_CONFIRM_DELAY_SECS;
 use crate::error::JitoError;
 use crate::types::{BundleStatus, JsonRpcRequest, JsonRpcResponse};
-use reqwest::Client;
 use serde::Deserialize;
-use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::signature::Signature;
 use solana_transaction_status_client_types::TransactionConfirmationStatus;
 use std::str::FromStr;
 use std::time::Duration;
 
 impl JitoBundler {
-    pub async fn get_bundle_status(
-        client: &Client,
-        endpoint: &str,
-        bundle_id: &str,
-    ) -> BundleStatus {
+    pub async fn get_bundle_status(&self, bundle_id: &str) -> BundleStatus {
+        let endpoint = self.config.network.block_engine_url();
         let request = JsonRpcRequest {
             jsonrpc: "2.0",
             id: 1,
@@ -23,7 +18,8 @@ impl JitoBundler {
             params: [[bundle_id]],
         };
 
-        let response = match client
+        let response = match self
+            .http_client
             .post(endpoint)
             .header("Content-Type", "application/json")
             .json(&request)
@@ -86,10 +82,8 @@ impl JitoBundler {
     }
 
     pub async fn wait_for_landing_on_chain(
+        &self,
         signatures: &[String],
-        rpc_client: &RpcClient,
-        max_attempts: u32,
-        interval_ms: u64,
     ) -> Result<BundleStatus, JitoError> {
         let parsed_signatures: Vec<Signature> = signatures
             .iter()
@@ -101,8 +95,15 @@ impl JitoBundler {
 
         tokio::time::sleep(Duration::from_secs(DEFAULT_INITIAL_CONFIRM_DELAY_SECS)).await;
 
+        let max_attempts = self.config.confirm_policy.max_attempts;
+        let interval_ms = self.config.confirm_policy.interval_ms;
+
         for _attempt in 0..max_attempts {
-            if let Ok(statuses) = rpc_client.get_signature_statuses(&parsed_signatures).await {
+            if let Ok(statuses) = self
+                .rpc_client
+                .get_signature_statuses(&parsed_signatures)
+                .await
+            {
                 for (j, status) in statuses.value.iter().enumerate() {
                     if let Some(s) = status
                         && let Some(err) = &s.err
@@ -137,17 +138,16 @@ impl JitoBundler {
     }
 
     pub async fn wait_for_landing_via_jito(
-        client: &Client,
-        endpoint_fn: impl Fn() -> String,
+        &self,
         bundle_id: &str,
-        max_attempts: u32,
-        interval_ms: u64,
     ) -> Result<BundleStatus, JitoError> {
         tokio::time::sleep(Duration::from_secs(DEFAULT_INITIAL_CONFIRM_DELAY_SECS)).await;
 
+        let max_attempts = self.config.confirm_policy.max_attempts;
+        let interval_ms = self.config.confirm_policy.interval_ms;
+
         for _attempt in 0..max_attempts {
-            let endpoint = endpoint_fn();
-            let status = Self::get_bundle_status(client, &endpoint, bundle_id).await;
+            let status = self.get_bundle_status(bundle_id).await;
 
             match &status {
                 BundleStatus::Landed { .. } | BundleStatus::Failed { .. } => {
