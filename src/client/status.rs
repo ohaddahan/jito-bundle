@@ -18,14 +18,7 @@ impl JitoBundler {
             params: [[bundle_id]],
         };
 
-        let response = match self
-            .http_client
-            .post(endpoint)
-            .header("Content-Type", "application/json")
-            .json(&request)
-            .send()
-            .await
-        {
+        let response = match self.jito_post(endpoint).json(&request).send().await {
             Ok(r) => r,
             Err(_) => return BundleStatus::Unknown,
         };

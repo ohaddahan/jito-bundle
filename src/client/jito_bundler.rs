@@ -33,6 +33,25 @@ impl JitoBundler {
         })
     }
 
+    pub fn jito_post(&self, url: &str) -> reqwest::RequestBuilder {
+        let full_url = if let Some(uuid) = &self.config.uuid
+            && !self.config.network.is_custom()
+        {
+            let separator = if url.contains('?') { "&" } else { "?" };
+            format!("{url}{separator}uuid={uuid}")
+        } else {
+            url.to_string()
+        };
+        let mut builder = self
+            .http_client
+            .post(full_url)
+            .header("Content-Type", "application/json");
+        if let Some(uuid) = &self.config.uuid {
+            builder = builder.header("x-jito-auth", uuid.as_str());
+        }
+        builder
+    }
+
     pub async fn fetch_tip(&self) -> Result<u64, JitoError> {
         let tip_floor_url = self.config.network.tip_floor_url();
         TipHelper::resolve_tip(&self.http_client, tip_floor_url, &self.config.tip_strategy).await
@@ -44,14 +63,14 @@ impl JitoBundler {
     ) -> Result<Bundle<'a>, JitoError> {
         let BuildBundleOptions {
             payer,
-            transactions,
+            transactions_instructions,
             lookup_tables,
             recent_blockhash,
             tip_lamports,
         } = input;
         let bundle = Bundle::new(BundleBuilderInputs {
             payer,
-            transactions,
+            transactions_instructions,
             lookup_tables,
             recent_blockhash,
             tip_lamports,
@@ -114,7 +133,7 @@ impl JitoBundler {
 
 pub struct BuildBundleOptions<'a> {
     pub payer: &'a Keypair,
-    pub transactions: Vec<Vec<Instruction>>,
+    pub transactions_instructions: [Option<Vec<Instruction>>; 5],
     pub lookup_tables: &'a [AddressLookupTableAccount],
     pub recent_blockhash: Hash,
     pub tip_lamports: u64,

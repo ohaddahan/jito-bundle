@@ -106,7 +106,7 @@ impl TransactionAnalysis {
 
     pub fn log_bundle_failure_analysis(
         transactions: &[VersionedTransaction],
-        all_instructions: &[Vec<Instruction>],
+        all_instructions: &[Option<Vec<Instruction>>],
         lookup_tables: &[AddressLookupTableAccount],
         error: &str,
     ) {
@@ -117,11 +117,29 @@ impl TransactionAnalysis {
             tracing::error!("--- transaction {i} ---");
             Self::log_transaction_size_warning(tx, i);
 
-            if let Some(ixs) = all_instructions.get(i) {
+            if let Some(Some(ixs)) = all_instructions.get(i) {
                 Self::log_accounts_not_in_luts(ixs, lookup_tables, &format!("TX{i}"));
             }
         }
 
         tracing::error!("=== END ANALYSIS ===");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solana_instruction::AccountMeta;
+    use solana_pubkey::Pubkey;
+
+    #[test]
+    fn log_bundle_failure_analysis_handles_option_slots() {
+        let ix = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: vec![AccountMeta::new(Pubkey::new_unique(), true)],
+            data: vec![1, 2, 3],
+        };
+        let slots: [Option<Vec<Instruction>>; 5] = [Some(vec![ix]), None, None, None, None];
+        TransactionAnalysis::log_bundle_failure_analysis(&[], &slots, &[], "test error");
     }
 }

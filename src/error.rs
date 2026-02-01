@@ -2,7 +2,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum JitoError {
-    #[error("bundle must contain between 1 and 5 transactions, got {count}")]
+    #[error("bundle must contain at least 1 transaction, got {count}")]
     InvalidBundleSize { count: usize },
     #[error(
         "tip account {tip_account} found in address lookup table — this will cause a runtime failure"
