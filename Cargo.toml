@@ -2,6 +2,17 @@
 name = "jito-bundle"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+authors = ["ohaddahan@gmail.com"]
+description = "Rust client for Jito bundle"
+repository = "https://github.com/ohaddahan/jito-bundle.git"
+documentation = "https://docs.rs/jito-bundle"
+exclude = [
+  ".claude/*",
+  ".github/*",
+  "scripts/*",
+  ".env*",
+]
 
 [dependencies]
 base64 = "0.22"

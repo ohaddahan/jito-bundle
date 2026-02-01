@@ -33,13 +33,13 @@ Under the hood, `JitoBundler` is the single struct that owns all resources (HTTP
 
 - **TipHelper** (`tip.rs`) — Picks a random tip account from the 8 Jito accounts, creates the SOL transfer instruction, and fetches the current tip floor from Jito's API so you're not overpaying or underpaying.
 
-- **BundleBuilder** (`bundle.rs`) — The core logic. Takes your instructions and applies all the Jito rules: prepends compute budget, handles jitodontfront (frontrun protection), places the tip correctly, validates LUT safety, and checks transaction sizes.
+- **Bundle** (`bundler/bundle.rs`) — The core logic. Takes your instructions (via `BundleBuilderInputs`) and applies all the Jito rules: prepends compute budget, handles jitodontfront (frontrun protection), places the tip correctly, validates LUT safety, and checks transaction sizes.
 
-- **Send methods** (`send.rs`) — `impl JitoBundler` methods that encode transactions to base64 and send them via JSON-RPC to Jito's block engine. If one endpoint fails, it tries the next. Jito has 5 geographic endpoints (mainnet, Amsterdam, Frankfurt, New York, Tokyo).
+- **Send methods** (`client/send.rs`) — `impl JitoBundler` methods that encode transactions to base64 and send them via JSON-RPC to Jito's block engine. If one endpoint fails, it tries the next. Jito has 5 geographic endpoints (mainnet, Amsterdam, Frankfurt, New York, Tokyo).
 
-- **Simulate methods** (`simulate.rs`) — `impl JitoBundler` methods that run your bundle through simulation before sending real SOL. Supports both per-transaction RPC simulation and Helius's atomic `simulateBundle` endpoint.
+- **Simulate methods** (`client/simulate.rs`) — `impl JitoBundler` methods that run your bundle through simulation before sending real SOL. Supports both per-transaction RPC simulation and Helius's atomic `simulateBundle` endpoint.
 
-- **Status methods** (`status.rs`) — `impl JitoBundler` methods that poll both the Jito API and Solana RPC to confirm your bundle actually landed. Handles rate limiting (429s), timeouts, and on-chain failures.
+- **Status methods** (`client/status.rs`) — `impl JitoBundler` methods that poll both the Jito API and Solana RPC to confirm your bundle actually landed. Handles rate limiting (429s), timeouts, and on-chain failures.
 
 This "split impl" pattern keeps each file focused on one concern while keeping all state access through `&self` — no passing around raw clients or config structs.
 
@@ -72,23 +72,29 @@ Here's a non-obvious gotcha: if any of your address lookup tables contain a Jito
 
 ```
 src/
-├── lib.rs           Re-exports the public API
-├── config/          JitoConfig, Network, TipStrategy, ConfirmPolicy
-├── error.rs         14 typed error variants
-├── constants.rs     Tip accounts, URLs, limits
-├── types.rs         JSON-RPC types, simulation types
-├── tip.rs           TipHelper (standalone helper)
+├── lib.rs                       Re-exports 8 public modules + pub use JitoError
+├── error.rs                     15 typed error variants
+├── constants.rs                 Tip accounts, URLs, limits, SYSTEM_PROGRAM_ID
+├── types.rs                     JSON-RPC types, BundleStatus, simulation types
+├── tip.rs                       TipHelper (stateless utility with static methods)
+├── analysis.rs                  TransactionAnalysis (stateless utility — size + LUT diagnostics)
+├── config/
+│   ├── jito.rs                  JitoConfig (builder pattern: with_network, with_helius_rpc_url, etc.)
+│   ├── network.rs               Network enum (Mainnet / Custom URLs)
+│   ├── confirm_policy.rs        ConfirmPolicy (max_attempts + interval_ms)
+│   └── tip_strategy.rs          TipStrategy (Fixed / FetchFloor / FetchFloorWithCap)
 ├── bundler/
-│   └── bundle.rs    BundleBuilder (standalone helper)
-├── client/
-│   ├── jito_bundler.rs  JitoBundler struct + facade methods (new, build, send_and_confirm)
-│   ├── send.rs          impl JitoBundler — bundle submission with endpoint retry
-│   ├── simulate.rs      impl JitoBundler — RPC + Helius simulation
-│   └── status.rs        impl JitoBundler — landing confirmation polling
-└── analysis.rs      Transaction size + LUT diagnostics
+│   └── bundle.rs                Bundle struct + BundleBuilderInputs (core build logic)
+└── client/
+    ├── jito_bundler.rs          JitoBundler facade + BuildBundleOptions input struct
+    ├── send.rs                  impl JitoBundler — bundle submission with endpoint retry
+    ├── simulate.rs              impl JitoBundler — RPC + Helius simulation
+    └── status.rs                impl JitoBundler — landing confirmation polling
 ```
 
 Notice how `send.rs`, `simulate.rs`, and `status.rs` all add methods to the same `JitoBundler` struct via split `impl` blocks. This keeps files small and focused while keeping all resource access through `&self`.
+
+The facade exposes a clean flow: `fetch_tip()` → `build_bundle(BuildBundleOptions)` → `send_and_confirm()`. The `BuildBundleOptions` input struct follows the Rust convention of using a struct when there are more than three parameters.
 
 ## Bugs We Ran Into
 
@@ -96,7 +102,7 @@ Notice how `send.rs`, `simulate.rs`, and `status.rs` all add methods to the same
 
 2. **Solana crate version fragmentation**: You can't just write `solana-sdk = "2.3"` and expect everything to resolve. Different Solana crates have different latest 2.x versions: `solana-pubkey` is at 2.4.0, `solana-compute-budget-interface` is at 2.2.2. Pin exact versions.
 
-3. **`allow_attributes = "deny"` strictness**: Our lint config denies all `#[allow(...)]` attributes. When we needed a float-to-u64 cast, we couldn't just `#[allow(cast_sign_loss)]` — we had to write explicit conditional logic to handle NaN/negative values.
+3. **`allow_attributes_without_reason = "deny"` strictness**: Our lint config denies `#[allow(...)]` without a `reason = "..."`. In test code, we use `#[allow(clippy::unwrap_used, reason = "test code")]`. In production code, we avoid `#[allow]` entirely and handle casts with explicit conditional logic.
 
 4. **Deprecated `system_program` module**: Caught by a deprecation warning. The fix was defining our own `SYSTEM_PROGRAM_ID` constant via the `pubkey!` macro rather than pulling in yet another crate.
 
@@ -112,4 +118,6 @@ Notice how `send.rs`, `simulate.rs`, and `status.rs` all add methods to the same
 
 - **Split impl blocks**: Rust lets you write `impl MyStruct` in multiple files. We use this to keep `JitoBundler`'s implementation organized by concern — sending, simulating, and status polling each live in their own file, but all access the struct's owned resources through `&self`. This avoids the anti-pattern of passing raw clients and config through static method parameters.
 
-- **Flat flow methods**: The top-level `send_and_confirm` reads like a recipe: simulate → send → log → wait → interpret. Each step is a single named call. Interpretation logic (the match on landing status) is extracted into a private helper so the orchestrating method stays scannable without scrolling.
+- **Input structs for clarity**: `BuildBundleOptions` and `BundleBuilderInputs` follow the convention of using a struct when a method has more than three parameters. The struct is fully destructured at the call site, ensuring every field is explicitly used — this makes it impossible to silently ignore a new field when the struct grows.
+
+- **Flat flow methods**: The top-level `send_and_confirm` reads like a recipe: simulate → send → log → wait → interpret. Each step is a single named call. Interpretation logic (the match on landing status) is extracted into a private `interpret_landing_status` helper so the orchestrating method stays scannable without scrolling.

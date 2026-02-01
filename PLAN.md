@@ -23,30 +23,38 @@ Create a standalone lib for Jito Bundle submission on Solana.
 
 ## Architecture
 ```
-JitoBundler (facade)
-  ├── TipHelper       — random tip account, tip instruction, compile tip tx, fetch floor
-  ├── BundleBuilder   — construct Vec<VersionedTransaction> with all rules
-  ├── SendHelper      — encode txs, retry across 5 geographic endpoints
-  ├── SimulateHelper  — per-tx RPC sim + Helius atomic simulateBundle
-  ├── StatusHelper    — poll Jito API + Solana RPC for confirmation
-  └── TransactionAnalysis — size checks, LUT coverage diagnostics
+JitoBundler (facade — client/jito_bundler.rs)
+  ├── TipHelper              — stateless: random tip account, tip ix, fetch floor  (tip.rs)
+  ├── Bundle                 — core build logic, [Option<Vec<Instruction>>; 5]     (bundler/bundle.rs)
+  ├── impl JitoBundler send  — encode txs, retry 5 geographic endpoints            (client/send.rs)
+  ├── impl JitoBundler sim   — per-tx RPC + Helius atomic simulateBundle           (client/simulate.rs)
+  ├── impl JitoBundler poll  — poll Jito API + Solana RPC for confirmation         (client/status.rs)
+  └── TransactionAnalysis    — stateless: size checks, LUT coverage diagnostics    (analysis.rs)
 ```
+
+Note: send/simulate/status are NOT separate structs — they are `impl JitoBundler` blocks split across files.
 
 ## Module Map
 ```
 src/
-  lib.rs           — re-exports
-  config.rs        — JitoConfig, Network, TipStrategy, ConfirmPolicy
-  error.rs         — JitoError (thiserror, 14 variants)
-  constants.rs     — tip accounts, endpoints, URLs, limits
-  types.rs         — BundleStatus, BundleResult, JSON-RPC types, simulation types
-  tip.rs           — TipHelper
-  send.rs          — SendHelper
-  simulate.rs      — SimulateHelper
-  status.rs        — StatusHelper
-  bundle.rs        — BundleBuilder
-  bundler.rs       — JitoBundler (high-level facade)
-  analysis.rs      — TransactionAnalysis
+  lib.rs                    — re-exports 8 modules + pub use JitoError
+  error.rs                  — JitoError (thiserror, 15 variants)
+  constants.rs              — tip accounts, endpoints, URLs, limits, SYSTEM_PROGRAM_ID
+  types.rs                  — BundleStatus, BundleResult, JSON-RPC types, simulation types
+  tip.rs                    — TipHelper (stateless utility)
+  analysis.rs               — TransactionAnalysis (stateless utility)
+  config/
+    jito.rs                 — JitoConfig (builder pattern)
+    network.rs              — Network enum (Mainnet / Custom)
+    confirm_policy.rs       — ConfirmPolicy
+    tip_strategy.rs         — TipStrategy
+  bundler/
+    bundle.rs               — Bundle struct + BundleBuilderInputs + build()
+  client/
+    jito_bundler.rs         — JitoBundler facade + BuildBundleOptions
+    send.rs                 — impl JitoBundler (send_bundle, try_endpoint, etc.)
+    simulate.rs             — impl JitoBundler (simulate_bundle_helius, etc.)
+    status.rs               — impl JitoBundler (wait_for_landing_on_chain, etc.)
 ```
 
 ## Key Decisions
@@ -68,7 +76,7 @@ src/
 └────┬─────┘
      ▼
 ┌──────────┐  InvalidBundleSize / TipAccountInLut / TransactionOversized
-│BUILD     │  BundleBuilder::build()
+│BUILD     │  Bundle::build()
 └────┬─────┘
      ▼
 ┌──────────┐  SimulationFailed
