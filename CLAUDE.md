@@ -34,12 +34,13 @@ src/
 ## Critical Bundle Rules
 
 1. Max 5 transactions per bundle (enforced at compile time via `[Option<Vec<Instruction>>; 5]`)
-2. jitodontfront goes into first tx's remaining_accounts (non-signer, non-writable)
-3. Tip instruction is always last ix of last tx
-4. If bundle < 5 txs: tip is a SEPARATE transaction compiled WITHOUT LUT
-5. If bundle == 5 txs: tip ix appended inline to last tx (with LUT)
-6. MUST validate no LUT contains the tip account before compilation
-7. Every tx gets a compute budget ix prepended
+2. Instruction slots are compacted before build (gaps removed, order preserved)
+3. jitodontfront goes into first tx's remaining_accounts (non-signer, non-writable)
+4. Tip instruction is always last ix of last tx
+5. If bundle < 5 txs: tip is a SEPARATE transaction compiled WITHOUT LUT
+6. If bundle == 5 txs: tip ix appended inline to last tx (with LUT)
+7. MUST validate no LUT contains the tip account when tip is inline
+8. Every tx gets a compute budget ix prepended
 
 ## Key Structs
 
@@ -71,7 +72,7 @@ Error: `thiserror 2`, Async: `tokio 1` (time), Logging: `tracing 0.1`, Random: `
 
 ## Testing
 
-- Unit tests: 16 total — `bundler/bundle.rs` (14), `analysis.rs` (1), `tip.rs` (1)
+- Unit tests: 21 total — `bundler/bundle.rs` (16), `analysis.rs` (1), `tip.rs` (4)
 - Integration tests in multi-module layout under `tests/`:
   - `tests/main.rs` — clippy allows (with reasons) + mod declarations for build, send, simulate
   - `tests/common/mod.rs` — `TestEnv`, `load_test_env()`, `build_jito_config()`, `create_memo_instruction()`, `build_memo_slots()`, `print_bundle_info()`, `print_bundle_result()`

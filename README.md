@@ -6,8 +6,8 @@ Submit up to 5 transactions that execute **atomically and in order** — the lib
 
 ## Features
 
-- **Atomic bundle construction** — compile-time max-5 enforcement via `[Option<Vec<Instruction>>; 5]`
-- **Automatic tipping** — fetches tip floor from Jito API, picks a random tip account, places the tip instruction correctly
+- **Atomic bundle construction** — fixed-size `[Option<Vec<Instruction>>; 5]` input, compacted before build to remove gaps while preserving order
+- **Automatic tipping** — resolves tip via `TipStrategy`, picks a random tip account, places the tip instruction correctly
 - **Endpoint retry** — tries all 5 Jito geographic endpoints (mainnet, Amsterdam, Frankfurt, New York, Tokyo)
 - **Helius simulation** — optional atomic `simulateBundle` before sending real SOL
 - **Frontrun protection** — optional jitodontfront pubkey support
@@ -79,7 +79,7 @@ let bundle = Bundle::new(BundleBuilderInputs {
 | `.with_network(Network)` | `Mainnet` (default) or `Custom { block_engine_url, tip_floor_url }` |
 | `.with_helius_rpc_url(url)` | Enable Helius atomic simulation before sending |
 | `.with_uuid(uuid)` | Jito authentication UUID |
-| `.with_tip_strategy(TipStrategy)` | `Fixed(u64)`, `FetchFloor`, `FetchFloorWithCap { min, max }` (default: floor with cap 100k..10M lamports) |
+| `.with_tip_strategy(TipStrategy)` | `Fixed(u64)`, `FetchFloor` (raw floor), `FetchFloorWithCap { min, max }` (default: floor with cap 100k..10M lamports) |
 | `.with_confirm_policy(ConfirmPolicy)` | Polling config (default: 30 attempts, 2s interval) |
 | `.with_jitodontfront(pubkey)` | Enable frontrun protection |
 | `.with_compute_unit_limit(u32)` | Per-tx compute budget (default: 3M) |
@@ -87,12 +87,13 @@ let bundle = Bundle::new(BundleBuilderInputs {
 ## Bundle Rules
 
 1. Max 5 transactions per bundle
-2. jitodontfront goes into first tx's `remaining_accounts` (non-signer, non-writable)
-3. Tip instruction is always last instruction of last transaction
-4. If bundle < 5 txs: tip is a **separate** transaction compiled **without** LUTs
-5. If bundle == 5 txs: tip appended inline to last transaction
-6. LUT validation: rejects bundles where any LUT contains the tip account
-7. Compute budget instruction prepended to every transaction
+2. Instruction slots are compacted before build (gaps removed, order preserved)
+3. jitodontfront goes into first tx's `remaining_accounts` (non-signer, non-writable)
+4. Tip instruction is always last instruction of last transaction
+5. If bundle < 5 txs: tip is a **separate** transaction compiled **without** LUTs
+6. If bundle == 5 txs: tip appended inline to last transaction
+7. LUT validation: rejects bundles where any LUT contains the tip account when tip is inline
+8. Compute budget instruction prepended to every transaction
 
 ## Error Handling
 
@@ -113,7 +114,7 @@ match result {
 ## Testing
 
 ```bash
-# Unit tests (16 tests, no network required)
+# Unit tests (21 tests, no network required)
 cargo test
 
 # Integration tests (requires .env with live credentials)

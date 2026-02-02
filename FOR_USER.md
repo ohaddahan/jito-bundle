@@ -31,7 +31,7 @@ You (caller)
 
 Under the hood, `JitoBundler` is the single struct that owns all resources (HTTP client, RPC client, config). Its implementation is **split across multiple files** — each file adds a group of related methods via separate `impl JitoBundler` blocks. Two standalone helpers also exist:
 
-- **TipHelper** (`tip.rs`) — Picks a random tip account from the 8 Jito accounts, creates the SOL transfer instruction, and fetches the current tip floor from Jito's API so you're not overpaying or underpaying.
+- **TipHelper** (`tip.rs`) — Picks a random tip account from the 8 Jito accounts, creates the SOL transfer instruction, and fetches the current tip floor from Jito's API. `TipStrategy` controls whether the floor is used raw or capped.
 
 - **Bundle** (`bundler/bundle.rs`) — The core logic. Takes your instructions (via `BundleBuilderInputs`) and applies all the Jito rules: prepends compute budget, handles jitodontfront (frontrun protection), places the tip correctly, validates LUT safety, and checks transaction sizes.
 
@@ -50,6 +50,14 @@ This "split impl" pattern keeps each file focused on one concern while keeping a
 Jito allows max 5 transactions per bundle. If your bundle has fewer than 5 instructions, the tip goes into its own **separate transaction** compiled **without address lookup tables**. This avoids a subtle issue where the tip account might conflict with LUT entries.
 
 If your bundle already has exactly 5 instructions (the max), there's no room for a separate tip tx, so the tip instruction gets appended to the last transaction inline.
+
+### Instruction Slot Compaction
+
+`transactions_instructions` is a fixed 5-slot array, but callers may leave gaps. Before building, the library compacts the slots (removing gaps while preserving order) so the tip is always placed at the end of the bundle as intended.
+
+### Tip Strategy Semantics
+
+`FetchFloor` returns the raw floor (no clamping). If you want bounds, use `FetchFloorWithCap { min, max }`, which clamps the raw floor into your chosen range.
 
 ### The LUT Validation
 

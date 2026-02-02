@@ -1,6 +1,6 @@
 use crate::config::tip_strategy::TipStrategy;
 use crate::constants::{
-    DEFAULT_TIP_LAMPORTS, JITO_TIP_ACCOUNTS, MAX_TIP_LAMPORTS, SYSTEM_PROGRAM_ID,
+    JITO_TIP_ACCOUNTS, SYSTEM_PROGRAM_ID,
 };
 use crate::error::JitoError;
 use crate::types::JitoTipFloorResponse;
@@ -65,15 +65,9 @@ impl TipHelper {
             reason: "tip_floor returned an empty array".to_string(),
         })?;
 
-        let tip_float = (tip_data.ema_landed_tips_50th_percentile * 1e9).ceil();
-        let tip_in_lamports = if tip_float.is_sign_negative() || tip_float.is_nan() {
-            0u64
-        } else {
-            tip_float as u64
-        };
-        let final_tip = tip_in_lamports.clamp(DEFAULT_TIP_LAMPORTS, MAX_TIP_LAMPORTS);
+        let tip_in_lamports = Self::compute_tip_floor_lamports(tip_data);
 
-        Ok((final_tip, tip_data.clone()))
+        Ok((tip_in_lamports, tip_data.clone()))
     }
 
     pub async fn resolve_tip(
@@ -85,12 +79,32 @@ impl TipHelper {
             TipStrategy::Fixed(lamports) => Ok(*lamports),
             TipStrategy::FetchFloor => {
                 let (tip, _) = Self::fetch_tip_floor(client, tip_floor_url).await?;
-                Ok(tip)
+                Ok(Self::apply_floor_strategy(tip, strategy))
             }
             TipStrategy::FetchFloorWithCap { min, max } => {
                 let (tip, _) = Self::fetch_tip_floor(client, tip_floor_url).await?;
-                Ok(tip.clamp(*min, *max))
+                Ok(Self::apply_floor_strategy(
+                    tip,
+                    &TipStrategy::FetchFloorWithCap { min: *min, max: *max },
+                ))
             }
+        }
+    }
+
+    fn compute_tip_floor_lamports(tip_data: &JitoTipFloorResponse) -> u64 {
+        let tip_float = (tip_data.ema_landed_tips_50th_percentile * 1e9).ceil();
+        if tip_float.is_sign_negative() || tip_float.is_nan() {
+            0u64
+        } else {
+            tip_float as u64
+        }
+    }
+
+    fn apply_floor_strategy(tip: u64, strategy: &TipStrategy) -> u64 {
+        match strategy {
+            TipStrategy::Fixed(lamports) => *lamports,
+            TipStrategy::FetchFloor => tip,
+            TipStrategy::FetchFloorWithCap { min, max } => tip.clamp(*min, *max),
         }
     }
 }
@@ -98,6 +112,19 @@ impl TipHelper {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::{DEFAULT_TIP_LAMPORTS, MAX_TIP_LAMPORTS};
+
+    fn make_tip_floor(ema_50th: f64) -> JitoTipFloorResponse {
+        JitoTipFloorResponse {
+            time: "2024-01-01T00:00:00Z".to_string(),
+            landed_tips_25th_percentile: 0.0,
+            landed_tips_50th_percentile: 0.0,
+            landed_tips_75th_percentile: 0.0,
+            landed_tips_95th_percentile: 0.0,
+            landed_tips_99th_percentile: 0.0,
+            ema_landed_tips_50th_percentile: ema_50th,
+        }
+    }
 
     #[test]
     fn random_tip_account_is_valid() {
@@ -105,5 +132,46 @@ mod tests {
             let account = TipHelper::get_random_tip_account();
             assert!(JITO_TIP_ACCOUNTS.contains(&account));
         }
+    }
+
+    #[test]
+    fn fetch_floor_does_not_clamp_by_default() {
+        let tip_data = make_tip_floor(20.0);
+        let tip = TipHelper::compute_tip_floor_lamports(&tip_data);
+        assert_eq!(tip, 20_000_000_000);
+    }
+
+    #[test]
+    fn fetch_floor_negative_or_nan_returns_zero() {
+        let negative = make_tip_floor(-0.1);
+        let tip = TipHelper::compute_tip_floor_lamports(&negative);
+        assert_eq!(tip, 0);
+
+        let nan = make_tip_floor(f64::NAN);
+        let tip = TipHelper::compute_tip_floor_lamports(&nan);
+        assert_eq!(tip, 0);
+    }
+
+    #[test]
+    fn fetch_floor_with_cap_applies_min_max() {
+        let tip = 20_000_000_000;
+        let clamped = TipHelper::apply_floor_strategy(
+            tip,
+            &TipStrategy::FetchFloorWithCap {
+                min: DEFAULT_TIP_LAMPORTS,
+                max: MAX_TIP_LAMPORTS,
+            },
+        );
+        assert_eq!(clamped, MAX_TIP_LAMPORTS);
+
+        let small_tip = 50_000;
+        let clamped = TipHelper::apply_floor_strategy(
+            small_tip,
+            &TipStrategy::FetchFloorWithCap {
+                min: DEFAULT_TIP_LAMPORTS,
+                max: MAX_TIP_LAMPORTS,
+            },
+        );
+        assert_eq!(clamped, DEFAULT_TIP_LAMPORTS);
     }
 }

@@ -6,18 +6,19 @@ Create a standalone lib for Jito Bundle submission on Solana.
 
 ## Config
 - `JitoConfig` with `Network` enum (Mainnet / Custom URLs), RPC URL, optional Helius RPC, optional UUID
-- `TipStrategy`: Fixed / FetchFloor / FetchFloorWithCap
+- `TipStrategy`: Fixed / FetchFloor (raw floor) / FetchFloorWithCap (clamped)
 - `ConfirmPolicy`: max_attempts + interval_ms
 - Optional `jitodontfront_pubkey` for frontrun protection
 - Configurable `compute_unit_limit` (default 3M)
 
 ## Bundle Rules (Implemented)
 - Max 5 transactions per bundle (validated)
+- Instruction slots are compacted before build (gaps removed, order preserved)
 - jitodontfront: added as non-signer non-writable account to first tx remaining_accounts
 - Tip placement: last instruction of last transaction
 - If bundle < 5 txs: tip gets its own separate transaction compiled WITHOUT LUT (empty lookup tables)
 - If bundle == 5 txs: tip instruction appended inline to last transaction
-- LUT validation: before compilation, verify no LUT contains the randomly selected tip account
+- LUT validation: before compilation, verify no LUT contains the randomly selected tip account when tip is inline
 - Each transaction validated ≤ 1232 bytes after compilation
 - Compute budget instruction prepended to every transaction
 

@@ -67,6 +67,20 @@ impl<'a> Bundle<'a> {
             .count()
     }
 
+    fn compact_transactions(&mut self) {
+        let mut new_slots: [Option<Vec<Instruction>>; 5] = std::array::from_fn(|_| None);
+        let mut idx = 0;
+        for slot in self.transactions_instructions.iter_mut() {
+            if let Some(ixs) = slot.take() {
+                if idx < new_slots.len() {
+                    new_slots[idx] = Some(ixs);
+                    idx += 1;
+                }
+            }
+        }
+        self.transactions_instructions = new_slots;
+    }
+
     fn last_populated_index(&self) -> Option<usize> {
         self.transactions_instructions
             .iter()
@@ -172,6 +186,7 @@ impl<'a> Bundle<'a> {
     }
 
     pub fn build(mut self) -> Result<Self, JitoError> {
+        self.compact_transactions();
         let count = self.populated_count();
         if count == 0 {
             return Err(JitoError::InvalidBundleSize { count: 0 });
@@ -262,6 +277,14 @@ mod tests {
                 AccountMeta::new(*payer, false),
             ],
             data,
+        }
+    }
+
+    fn make_custom_instruction(payer: &Pubkey, program_id: Pubkey) -> Instruction {
+        Instruction {
+            program_id,
+            accounts: vec![AccountMeta::new(*payer, true)],
+            data: vec![1, 2, 3],
         }
     }
 
@@ -568,6 +591,65 @@ mod tests {
         assert!(
             matches!(err, Some(JitoError::TipAccountInLut { .. })),
             "expected TipAccountInLut, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn tip_appended_to_last_populated_slot_even_with_gaps() {
+        let payer = Keypair::new();
+        let pubkey = payer.pubkey();
+        let ix1 = make_custom_instruction(&pubkey, Pubkey::new_unique());
+        let ix2 = make_custom_instruction(&pubkey, Pubkey::new_unique());
+        let inputs = BundleBuilderInputs {
+            payer: &payer,
+            transactions_instructions: [Some(vec![ix1]), None, Some(vec![ix2]), None, None],
+            lookup_tables: &[],
+            recent_blockhash: Hash::default(),
+            tip_lamports: 100_000,
+            jitodontfront_pubkey: None,
+            compute_unit_limit: 200_000,
+        };
+        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let last_idx = match bundle.last_populated_index() {
+            Some(idx) => idx,
+            None => {
+                assert!(false, "no populated slots found");
+                std::process::abort();
+            }
+        };
+        let last_tx = get_slot(&bundle, last_idx);
+        let last_ix = &last_tx[last_tx.len() - 1];
+        assert_eq!(
+            last_ix.program_id, SYSTEM_PROGRAM_ID,
+            "expected tip to be appended to the last populated slot"
+        );
+    }
+
+    #[test]
+    fn jitodontfront_not_duplicated_if_already_present() {
+        let payer = Keypair::new();
+        let jdf = Pubkey::new_unique();
+        let mut ix = make_custom_instruction(&payer.pubkey(), Pubkey::new_unique());
+        ix.accounts.push(AccountMeta::new_readonly(jdf, false));
+        let inputs = BundleBuilderInputs {
+            payer: &payer,
+            transactions_instructions: [Some(vec![ix]), None, None, None, None],
+            lookup_tables: &[],
+            recent_blockhash: Hash::default(),
+            tip_lamports: 100_000,
+            jitodontfront_pubkey: Some(&jdf),
+            compute_unit_limit: 200_000,
+        };
+        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let first_ix = &get_slot(&bundle, 0)[0];
+        let count = first_ix
+            .accounts
+            .iter()
+            .filter(|acct| acct.pubkey == jdf)
+            .count();
+        assert_eq!(
+            count, 1,
+            "expected jitodontfront account to appear exactly once"
         );
     }
 }
