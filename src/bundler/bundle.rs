@@ -70,12 +70,12 @@ impl<'a> Bundle<'a> {
     fn compact_transactions(&mut self) {
         let mut new_slots: [Option<Vec<Instruction>>; 5] = std::array::from_fn(|_| None);
         let mut idx = 0;
-        for slot in self.transactions_instructions.iter_mut() {
-            if let Some(ixs) = slot.take() {
-                if idx < new_slots.len() {
-                    new_slots[idx] = Some(ixs);
-                    idx += 1;
-                }
+        for slot in &mut self.transactions_instructions {
+            if let Some(ixs) = slot.take()
+                && idx < new_slots.len()
+            {
+                new_slots[idx] = Some(ixs);
+                idx += 1;
             }
         }
         self.transactions_instructions = new_slots;
