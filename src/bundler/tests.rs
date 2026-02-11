@@ -1,242 +1,14 @@
-use crate::JitoError;
-use crate::analysis::TransactionAnalysis;
-use crate::constants::MAX_BUNDLE_TRANSACTIONS;
-use crate::tip::TipHelper;
-use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_instruction::{AccountMeta, Instruction};
-use solana_pubkey::Pubkey;
-use solana_sdk::address_lookup_table::AddressLookupTableAccount;
-use solana_sdk::hash::Hash;
-use solana_sdk::message::{VersionedMessage, v0};
-use solana_sdk::signature::{Keypair, Signer};
-use solana_sdk::transaction::VersionedTransaction;
-
-pub struct Bundle<'a> {
-    pub versioned_transaction: Vec<VersionedTransaction>,
-    pub payer: &'a Keypair,
-    pub transactions_instructions: [Option<Vec<Instruction>>; 5],
-    pub lookup_tables: &'a [AddressLookupTableAccount],
-    pub recent_blockhash: Hash,
-    pub tip_lamports: u64,
-    pub jitodontfront_pubkey: Option<&'a Pubkey>,
-    pub compute_unit_limit: u32,
-    pub tip_account: Pubkey,
-    pub last_txn_is_tip: bool,
-}
-
-pub struct BundleBuilderInputs<'a> {
-    pub payer: &'a Keypair,
-    pub transactions_instructions: [Option<Vec<Instruction>>; 5],
-    pub lookup_tables: &'a [AddressLookupTableAccount],
-    pub recent_blockhash: Hash,
-    pub tip_lamports: u64,
-    pub jitodontfront_pubkey: Option<&'a Pubkey>,
-    pub compute_unit_limit: u32,
-}
-
-impl<'a> Bundle<'a> {
-    pub fn new(inputs: BundleBuilderInputs<'a>) -> Self {
-        let BundleBuilderInputs {
-            payer,
-            transactions_instructions,
-            lookup_tables,
-            recent_blockhash,
-            tip_lamports,
-            jitodontfront_pubkey,
-            compute_unit_limit,
-        } = inputs;
-        let tip_account = TipHelper::get_random_tip_account();
-        Self {
-            versioned_transaction: vec![],
-            tip_account,
-            payer,
-            transactions_instructions,
-            lookup_tables,
-            recent_blockhash,
-            tip_lamports,
-            jitodontfront_pubkey,
-            compute_unit_limit,
-            last_txn_is_tip: false,
-        }
-    }
-
-    fn populated_count(&self) -> usize {
-        self.transactions_instructions
-            .iter()
-            .filter(|slot| slot.is_some())
-            .count()
-    }
-
-    fn compact_transactions(&mut self) {
-        let mut new_slots: [Option<Vec<Instruction>>; 5] = std::array::from_fn(|_| None);
-        let mut idx = 0;
-        for slot in &mut self.transactions_instructions {
-            if let Some(ixs) = slot.take()
-                && idx < new_slots.len()
-            {
-                new_slots[idx] = Some(ixs);
-                idx += 1;
-            }
-        }
-        self.transactions_instructions = new_slots;
-    }
-
-    fn last_populated_index(&self) -> Option<usize> {
-        self.transactions_instructions
-            .iter()
-            .rposition(|slot| slot.is_some())
-    }
-
-    fn append_tip_transaction(&mut self) -> Result<(), JitoError> {
-        let tip_ix = TipHelper::create_tip_instruction_to(
-            &self.payer.pubkey(),
-            &self.tip_account,
-            self.tip_lamports,
-        );
-        let first_none = self
-            .transactions_instructions
-            .iter()
-            .position(|slot| slot.is_none())
-            .ok_or(JitoError::InvalidBundleSize {
-                count: MAX_BUNDLE_TRANSACTIONS,
-            })?;
-        self.transactions_instructions[first_none] = Some(vec![tip_ix]);
-        self.last_txn_is_tip = true;
-        Ok(())
-    }
-
-    fn append_tip_instruction(&mut self) {
-        let tip_ix = TipHelper::create_tip_instruction_to(
-            &self.payer.pubkey(),
-            &self.tip_account,
-            self.tip_lamports,
-        );
-        if let Some(last_idx) = self.last_populated_index()
-            && let Some(ixs) = &mut self.transactions_instructions[last_idx]
-        {
-            ixs.push(tip_ix);
-        }
-    }
-
-    fn apply_jitodont_front(&mut self, jitodontfront_pubkey: &Pubkey) {
-        for ixs in self.transactions_instructions.iter_mut().flatten() {
-            for instruction in ixs.iter_mut() {
-                instruction
-                    .accounts
-                    .retain(|acct| !acct.pubkey.to_string().starts_with("jitodontfront"));
-            }
-        }
-        if let Some(Some(ixs)) = self.transactions_instructions.first_mut()
-            && let Some(instruction) = ixs.first_mut()
-        {
-            instruction
-                .accounts
-                .push(AccountMeta::new_readonly(*jitodontfront_pubkey, false));
-        }
-    }
-
-    fn build_versioned_transaction(
-        &self,
-        index: usize,
-        total: usize,
-        tx_instructions: &[Instruction],
-    ) -> Result<VersionedTransaction, JitoError> {
-        let compute_budget =
-            ComputeBudgetInstruction::set_compute_unit_limit(self.compute_unit_limit);
-        let mut instructions = vec![compute_budget];
-        instructions.extend_from_slice(tx_instructions);
-
-        let lut: &[AddressLookupTableAccount] = if index == total - 1 && self.last_txn_is_tip {
-            &[]
-        } else {
-            self.lookup_tables
-        };
-
-        let message = v0::Message::try_compile(
-            &self.payer.pubkey(),
-            &instructions,
-            lut,
-            self.recent_blockhash,
-        )
-        .map_err(|e| {
-            TransactionAnalysis::log_accounts_not_in_luts(
-                &instructions,
-                lut,
-                &format!("TX: {index} COMPILE_FAIL"),
-            );
-            JitoError::MessageCompileFailed {
-                index,
-                reason: e.to_string(),
-            }
-        })?;
-        let txn = VersionedTransaction::try_new(VersionedMessage::V0(message), &[self.payer])
-            .map_err(|e| JitoError::TransactionCreationFailed {
-                index,
-                reason: e.to_string(),
-            })?;
-        let size_info = TransactionAnalysis::analyze_transaction_size(&txn);
-        if size_info.is_oversized {
-            return Err(JitoError::TransactionOversized {
-                index,
-                size: size_info.size,
-                max: size_info.max_size,
-            });
-        }
-        Ok(txn)
-    }
-
-    pub fn build(mut self) -> Result<Self, JitoError> {
-        self.compact_transactions();
-        let count = self.populated_count();
-        if count == 0 {
-            return Err(JitoError::InvalidBundleSize { count: 0 });
-        }
-
-        if let Some(jitodontfront_pubkey) = self.jitodontfront_pubkey {
-            self.apply_jitodont_front(jitodontfront_pubkey);
-        }
-
-        if count < MAX_BUNDLE_TRANSACTIONS {
-            self.append_tip_transaction()?;
-        } else {
-            self.append_tip_instruction();
-        }
-
-        let total = self.populated_count();
-        let mut versioned = Vec::with_capacity(total);
-        for (compiled_index, ixs) in self.transactions_instructions.iter().flatten().enumerate() {
-            let txn = self.build_versioned_transaction(compiled_index, total, ixs)?;
-            versioned.push(txn);
-        }
-        self.versioned_transaction = versioned;
-
-        if !self.last_txn_is_tip {
-            Self::validate_tip_not_in_luts(&self.tip_account, self.lookup_tables)?;
-        }
-
-        Ok(self)
-    }
-
-    fn validate_tip_not_in_luts(
-        tip_account: &Pubkey,
-        lookup_tables: &[AddressLookupTableAccount],
-    ) -> Result<(), JitoError> {
-        for lut in lookup_tables {
-            if lut.addresses.contains(tip_account) {
-                return Err(JitoError::TipAccountInLut {
-                    tip_account: tip_account.to_string(),
-                });
-            }
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::JitoError;
+    use crate::bundler::builder::types::{BundleBuilder, BundleBuilderInputs};
+    use crate::bundler::bundle::types::Bundle;
     use crate::constants::{JITO_TIP_ACCOUNTS, SOLANA_MAX_TX_SIZE, SYSTEM_PROGRAM_ID};
-    use solana_sdk::signature::Keypair;
+    use solana_instruction::{AccountMeta, Instruction};
+    use solana_pubkey::Pubkey;
+    use solana_sdk::address_lookup_table::AddressLookupTableAccount;
+    use solana_sdk::hash::Hash;
+    use solana_sdk::signature::{Keypair, Signer};
 
     fn assert_build_ok(result: Result<Bundle<'_>, JitoError>) -> Bundle<'_> {
         match result {
@@ -325,7 +97,7 @@ mod tests {
             jdf: Some(&jdf),
             tip: 100_000,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         let first_tx_instructions = get_slot(&bundle, 0);
         let first_ix = &first_tx_instructions[0];
         let last_account = &first_ix.accounts[first_ix.accounts.len() - 1];
@@ -345,7 +117,7 @@ mod tests {
             jdf: None,
             tip: 100_000,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         let first_ix = &get_slot(&bundle, 0)[0];
         assert_eq!(first_ix.accounts.len(), 2);
     }
@@ -361,7 +133,7 @@ mod tests {
             jdf: None,
             tip: 100_000,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         assert_eq!(bundle.versioned_transaction.len(), 2);
         assert!(bundle.last_txn_is_tip);
     }
@@ -377,7 +149,7 @@ mod tests {
             jdf: None,
             tip: 100_000,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         assert_eq!(bundle.versioned_transaction.len(), 5);
         assert!(bundle.last_txn_is_tip);
     }
@@ -393,7 +165,7 @@ mod tests {
             jdf: None,
             tip: 100_000,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         assert_eq!(bundle.versioned_transaction.len(), 5);
         assert!(!bundle.last_txn_is_tip);
     }
@@ -410,7 +182,7 @@ mod tests {
             jitodontfront_pubkey: None,
             compute_unit_limit: 200_000,
         };
-        let result = Bundle::new(inputs).build();
+        let result = BundleBuilder::build(inputs);
         assert!(result.is_err());
         let err = result.err();
         assert!(
@@ -431,7 +203,7 @@ mod tests {
                 jdf: None,
                 tip: 100_000,
             });
-            let result = Bundle::new(inputs).build();
+            let result = BundleBuilder::build(inputs);
             assert!(result.is_ok(), "expected Ok for {tx_count} transactions");
         }
     }
@@ -447,7 +219,7 @@ mod tests {
             jdf: None,
             tip: 100_000,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         for (i, tx) in bundle.versioned_transaction.iter().enumerate() {
             let serialized = bincode::serialize(tx).unwrap_or_default();
             assert!(
@@ -477,7 +249,7 @@ mod tests {
             jitodontfront_pubkey: None,
             compute_unit_limit: 200_000,
         };
-        let result = Bundle::new(inputs).build();
+        let result = BundleBuilder::build(inputs);
         assert!(result.is_err());
         let err = result.err();
         assert!(
@@ -497,7 +269,7 @@ mod tests {
             jdf: None,
             tip: 100_000,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         assert!(bundle.last_txn_is_tip);
         assert_eq!(bundle.populated_count(), 3);
         let tip_tx = get_slot(&bundle, 2);
@@ -516,7 +288,7 @@ mod tests {
             jdf: None,
             tip: 100_000,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         assert!(!bundle.last_txn_is_tip);
         assert_eq!(bundle.populated_count(), 5);
         let last_tx = get_slot(&bundle, 4);
@@ -535,7 +307,7 @@ mod tests {
             jdf: None,
             tip: 100_000,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         assert!(
             JITO_TIP_ACCOUNTS.contains(&bundle.tip_account),
             "tip_account {} not in JITO_TIP_ACCOUNTS",
@@ -555,7 +327,7 @@ mod tests {
             jdf: None,
             tip: tip_amount,
         });
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         let last_idx = bundle.last_populated_index();
         assert!(last_idx.is_some(), "no populated slots found");
         let tip_tx = get_slot(&bundle, last_idx.unwrap_or(0));
@@ -585,7 +357,7 @@ mod tests {
             jdf: None,
             tip: 100_000,
         });
-        let result = Bundle::new(inputs).build();
+        let result = BundleBuilder::build(inputs);
         assert!(result.is_err());
         let err = result.err();
         assert!(
@@ -609,7 +381,7 @@ mod tests {
             jitodontfront_pubkey: None,
             compute_unit_limit: 200_000,
         };
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         let last_idx = match bundle.last_populated_index() {
             Some(idx) => idx,
             None => {
@@ -628,7 +400,7 @@ mod tests {
     #[test]
     fn jitodontfront_not_duplicated_if_already_present() {
         let payer = Keypair::new();
-        let jdf = Pubkey::new_unique();
+        let jdf = Pubkey::from_str_const("jitodontfront111111111111111111111111111111");
         let mut ix = make_custom_instruction(&payer.pubkey(), Pubkey::new_unique());
         ix.accounts.push(AccountMeta::new_readonly(jdf, false));
         let inputs = BundleBuilderInputs {
@@ -640,7 +412,7 @@ mod tests {
             jitodontfront_pubkey: Some(&jdf),
             compute_unit_limit: 200_000,
         };
-        let bundle = assert_build_ok(Bundle::new(inputs).build());
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
         let first_ix = &get_slot(&bundle, 0)[0];
         let count = first_ix
             .accounts

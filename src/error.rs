@@ -38,4 +38,6 @@ pub enum JitoError {
     Network { reason: String },
     #[error("invalid signature format: {reason}")]
     InvalidSignature { reason: String },
+    #[error("get_latest_blockhash error: {reason}")]
+    GetLatestBlockhash { reason: String },
 }

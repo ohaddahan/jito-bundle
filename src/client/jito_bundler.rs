@@ -1,4 +1,5 @@
-use crate::bundler::bundle::{Bundle, BundleBuilderInputs};
+use crate::bundler::builder::types::{BundleBuilder, BundleBuilderInputs};
+use crate::bundler::bundle::types::Bundle;
 use crate::config::jito::JitoConfig;
 use crate::error::JitoError;
 use crate::tip::TipHelper;
@@ -7,7 +8,6 @@ use reqwest::Client;
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_instruction::Instruction;
 use solana_sdk::address_lookup_table::AddressLookupTableAccount;
-use solana_sdk::hash::Hash;
 use solana_sdk::signer::keypair::Keypair;
 use std::time::Duration;
 
@@ -57,7 +57,7 @@ impl JitoBundler {
         TipHelper::resolve_tip(&self.http_client, tip_floor_url, &self.config.tip_strategy).await
     }
 
-    pub fn build_bundle<'a>(
+    pub async fn build_bundle<'a>(
         &'a self,
         input: BuildBundleOptions<'a>,
     ) -> Result<Bundle<'a>, JitoError> {
@@ -65,10 +65,14 @@ impl JitoBundler {
             payer,
             transactions_instructions,
             lookup_tables,
-            recent_blockhash,
-            tip_lamports,
         } = input;
-        let bundle = Bundle::new(BundleBuilderInputs {
+        let tip_lamports = self.fetch_tip().await?;
+        let recent_blockhash = self.rpc_client.get_latest_blockhash().await.map_err(|e| {
+            JitoError::GetLatestBlockhash {
+                reason: e.to_string(),
+            }
+        })?;
+        let bundle = BundleBuilder::build(BundleBuilderInputs {
             payer,
             transactions_instructions,
             lookup_tables,
@@ -76,8 +80,8 @@ impl JitoBundler {
             tip_lamports,
             jitodontfront_pubkey: self.config.jitodontfront_pubkey.as_ref(),
             compute_unit_limit: self.config.compute_unit_limit,
-        });
-        bundle.build()
+        })?;
+        Ok(bundle)
     }
 
     pub async fn simulate_helius(
@@ -135,6 +139,4 @@ pub struct BuildBundleOptions<'a> {
     pub payer: &'a Keypair,
     pub transactions_instructions: [Option<Vec<Instruction>>; 5],
     pub lookup_tables: &'a [AddressLookupTableAccount],
-    pub recent_blockhash: Hash,
-    pub tip_lamports: u64,
 }

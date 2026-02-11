@@ -1,4 +1,4 @@
-use jito_bundle::bundler::bundle::Bundle;
+use jito_bundle::bundler::bundle::types::Bundle;
 use jito_bundle::config::jito::JitoConfig;
 use jito_bundle::config::network::Network;
 use jito_bundle::constants::DEFAULT_TIP_LAMPORTS;

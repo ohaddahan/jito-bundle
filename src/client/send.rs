@@ -1,4 +1,4 @@
-use crate::bundler::bundle::Bundle;
+use crate::bundler::bundle::types::Bundle;
 use crate::client::jito_bundler::JitoBundler;
 use crate::constants::JITO_EXPLORER_URL;
 use crate::error::JitoError;

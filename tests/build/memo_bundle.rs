@@ -1,5 +1,5 @@
 use crate::common;
-use jito_bundle::bundler::bundle::{Bundle, BundleBuilderInputs};
+use jito_bundle::bundler::builder::types::{BundleBuilder, BundleBuilderInputs};
 use jito_bundle::constants::{DEFAULT_COMPUTE_UNIT_LIMIT, SOLANA_MAX_TX_SIZE};
 use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::signature::Signer;
@@ -32,17 +32,14 @@ async fn build_memo_bundle_succeeds() {
         jitodontfront_pubkey: None,
         compute_unit_limit: DEFAULT_COMPUTE_UNIT_LIMIT,
     };
-
-    let result = Bundle::new(inputs).build();
+    let result = BundleBuilder::build(inputs);
     assert!(result.is_ok(), "bundle build failed");
     let bundle = match result {
         Ok(b) => b,
         Err(_) => return,
     };
-
     common::print_bundle_info("build_memo_bundle", &bundle);
     assert_eq!(bundle.versioned_transaction.len(), 3);
-
     for (i, tx) in bundle.versioned_transaction.iter().enumerate() {
         let serialized = bincode::serialize(tx).unwrap_or_default();
         assert!(
