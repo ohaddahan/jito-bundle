@@ -11,6 +11,7 @@ mod bundle_builder_tests {
     use solana_sdk::hash::Hash;
     use solana_sdk::signature::{Keypair, Signer};
 
+    /// Unwraps successful build results with test-friendly failure output.
     fn assert_build_ok(result: Result<BuiltBundle, JitoError>) -> BuiltBundle {
         match result {
             Ok(bundle) => bundle,
@@ -21,6 +22,7 @@ mod bundle_builder_tests {
         }
     }
 
+    /// Returns instructions stored in a specific post-build slot.
     fn get_slot(bundle: &BuiltBundle, index: usize) -> &Vec<Instruction> {
         let slot = &bundle.instruction_slots()[index];
         if let Some(ixs) = slot {
@@ -31,15 +33,43 @@ mod bundle_builder_tests {
         }
     }
 
-    struct TestBundleParams<'a> {
-        pub payer: &'a Keypair,
-        pub tx_count: usize,
-        pub blockhash: Hash,
-        pub luts: &'a [AddressLookupTableAccount],
-        pub jdf: Option<&'a Pubkey>,
-        pub tip: u64,
+    /// Returns true when instruction matches the expected tip transfer format.
+    fn is_tip_instruction(ix: &Instruction, tip_account: &Pubkey, tip_lamports: u64) -> bool {
+        let lamports = tip_lamports.to_le_bytes();
+        ix.program_id == SYSTEM_PROGRAM_ID
+            && ix.accounts.len() >= 2
+            && ix.accounts[1].pubkey == *tip_account
+            && ix
+                .data
+                .get(0..4)
+                .is_some_and(|op| op == [2, 0, 0, 0].as_slice())
+            && ix
+                .data
+                .get(4..12)
+                .is_some_and(|bytes| bytes == lamports.as_slice())
     }
 
+    /// Counts tip instructions across all populated slots.
+    fn count_tip_instructions(bundle: &BuiltBundle) -> usize {
+        bundle
+            .instruction_slots()
+            .iter()
+            .flatten()
+            .flat_map(|ixs| ixs.iter())
+            .filter(|ix| is_tip_instruction(ix, &bundle.tip_account, bundle.tip_lamports))
+            .count()
+    }
+
+    struct TestBundleParams<'a> {
+        payer: &'a Keypair,
+        tx_count: usize,
+        blockhash: Hash,
+        luts: &'a [AddressLookupTableAccount],
+        jdf: Option<&'a Pubkey>,
+        tip: u64,
+    }
+
+    /// Creates a simple system instruction used by test transactions.
     fn make_noop_instruction(payer: &Pubkey) -> Instruction {
         let mut data = vec![2, 0, 0, 0];
         data.extend_from_slice(&0u64.to_le_bytes());
@@ -53,6 +83,7 @@ mod bundle_builder_tests {
         }
     }
 
+    /// Creates a custom single-account instruction for tests.
     fn make_custom_instruction(payer: &Pubkey, program_id: Pubkey) -> Instruction {
         Instruction {
             program_id,
@@ -61,6 +92,7 @@ mod bundle_builder_tests {
         }
     }
 
+    /// Builds standard test inputs with configurable tx count and options.
     fn make_bundle_inputs(params: TestBundleParams<'_>) -> BundleBuilderInputs<'_> {
         let TestBundleParams {
             payer,
@@ -86,6 +118,7 @@ mod bundle_builder_tests {
         }
     }
 
+    /// Verifies jito-dont-front account gets injected into first instruction.
     #[test]
     fn jitodontfront_added_to_first_instruction() {
         let payer = Keypair::new();
@@ -107,6 +140,7 @@ mod bundle_builder_tests {
         assert!(!last_account.is_writable);
     }
 
+    /// Verifies no extra account is added when JDF is disabled.
     #[test]
     fn jitodontfront_none_means_no_extra_account() {
         let payer = Keypair::new();
@@ -123,6 +157,7 @@ mod bundle_builder_tests {
         assert_eq!(first_ix.accounts.len(), 2);
     }
 
+    /// Verifies one input transaction produces one tx plus separate tip tx.
     #[test]
     fn one_tx_produces_two_versioned_txs() {
         let payer = Keypair::new();
@@ -139,6 +174,7 @@ mod bundle_builder_tests {
         assert!(matches!(bundle.tip_mode, TipMode::SeparateTx));
     }
 
+    /// Verifies four input transactions produce five total with separate tip.
     #[test]
     fn four_txs_produce_five_versioned_txs() {
         let payer = Keypair::new();
@@ -155,6 +191,7 @@ mod bundle_builder_tests {
         assert!(matches!(bundle.tip_mode, TipMode::SeparateTx));
     }
 
+    /// Verifies five input transactions keep tip inline in final transaction.
     #[test]
     fn five_txs_produce_five_versioned_txs_tip_inline() {
         let payer = Keypair::new();
@@ -171,6 +208,7 @@ mod bundle_builder_tests {
         assert!(matches!(bundle.tip_mode, TipMode::InlineLastTx));
     }
 
+    /// Verifies empty bundles are rejected with size error.
     #[test]
     fn zero_transactions_returns_invalid_bundle_size() {
         let payer = Keypair::new();
@@ -192,6 +230,7 @@ mod bundle_builder_tests {
         );
     }
 
+    /// Verifies every bundle size from one through five builds successfully.
     #[test]
     fn one_to_five_transactions_all_succeed() {
         for tx_count in 1..=5 {
@@ -209,6 +248,7 @@ mod bundle_builder_tests {
         }
     }
 
+    /// Verifies built transactions respect Solana max serialized size.
     #[test]
     fn compiled_transactions_within_size_limit() {
         let payer = Keypair::new();
@@ -221,8 +261,21 @@ mod bundle_builder_tests {
             tip: 100_000,
         });
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
+        assert!(
+            !bundle.transactions.is_empty(),
+            "expected at least one compiled transaction"
+        );
         for (i, tx) in bundle.transactions.iter().enumerate() {
-            let serialized = bincode::serialize(tx).unwrap_or_default();
+            let serialized_result = bincode::serialize(tx);
+            assert!(
+                serialized_result.is_ok(),
+                "failed to serialize transaction {i}"
+            );
+            let serialized = serialized_result.unwrap_or_default();
+            assert!(
+                !serialized.is_empty(),
+                "transaction {i} serialized to empty bytes"
+            );
             assert!(
                 serialized.len() <= SOLANA_MAX_TX_SIZE,
                 "transaction {i} is {size} bytes, exceeds {SOLANA_MAX_TX_SIZE}",
@@ -231,6 +284,7 @@ mod bundle_builder_tests {
         }
     }
 
+    /// Verifies oversized instruction payloads fail at build time.
     #[test]
     fn oversized_transaction_returns_error() {
         let payer = Keypair::new();
@@ -259,6 +313,7 @@ mod bundle_builder_tests {
         );
     }
 
+    /// Verifies tip is emitted as a separate transaction when bundle is not full.
     #[test]
     fn tip_separate_tx_when_under_five() {
         let payer = Keypair::new();
@@ -273,11 +328,26 @@ mod bundle_builder_tests {
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
         assert!(matches!(bundle.tip_mode, TipMode::SeparateTx));
         assert_eq!(bundle.populated_count(), 3);
+        assert_eq!(count_tip_instructions(&bundle), 1);
+        for idx in 0..2 {
+            let has_tip_in_original_tx = get_slot(&bundle, idx)
+                .iter()
+                .any(|ix| is_tip_instruction(ix, &bundle.tip_account, bundle.tip_lamports));
+            assert!(
+                !has_tip_in_original_tx,
+                "did not expect tip instruction inline in slot {idx}"
+            );
+        }
         let tip_tx = get_slot(&bundle, 2);
         assert_eq!(tip_tx.len(), 1);
-        assert_eq!(tip_tx[0].program_id, SYSTEM_PROGRAM_ID);
+        assert!(is_tip_instruction(
+            &tip_tx[0],
+            &bundle.tip_account,
+            bundle.tip_lamports
+        ));
     }
 
+    /// Verifies tip is appended inline when bundle already has five txs.
     #[test]
     fn tip_inline_when_five_txs() {
         let payer = Keypair::new();
@@ -291,12 +361,28 @@ mod bundle_builder_tests {
         });
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
         assert!(matches!(bundle.tip_mode, TipMode::InlineLastTx));
+        assert_eq!(bundle.transactions.len(), 5);
         assert_eq!(bundle.populated_count(), 5);
+        assert_eq!(count_tip_instructions(&bundle), 1);
+        for idx in 0..4 {
+            let has_tip_in_non_last_tx = get_slot(&bundle, idx)
+                .iter()
+                .any(|ix| is_tip_instruction(ix, &bundle.tip_account, bundle.tip_lamports));
+            assert!(
+                !has_tip_in_non_last_tx,
+                "did not expect tip instruction in non-last slot {idx}"
+            );
+        }
         let last_tx = get_slot(&bundle, 4);
         let last_ix = &last_tx[last_tx.len() - 1];
-        assert_eq!(last_ix.program_id, SYSTEM_PROGRAM_ID);
+        assert!(is_tip_instruction(
+            last_ix,
+            &bundle.tip_account,
+            bundle.tip_lamports
+        ));
     }
 
+    /// Verifies selected tip account is always from known Jito tip set.
     #[test]
     fn tip_account_is_valid_jito_account() {
         let payer = Keypair::new();
@@ -316,6 +402,7 @@ mod bundle_builder_tests {
         );
     }
 
+    /// Verifies encoded transfer lamports in tip instruction are correct.
     #[test]
     fn tip_lamports_encoded_correctly() {
         let payer = Keypair::new();
@@ -341,6 +428,7 @@ mod bundle_builder_tests {
         assert_eq!(encoded_lamports, &tip_amount.to_le_bytes());
     }
 
+    /// Verifies inline tip mode rejects LUTs containing tip accounts.
     #[test]
     fn tip_account_in_lut_rejected() {
         let payer = Keypair::new();
@@ -367,6 +455,28 @@ mod bundle_builder_tests {
         );
     }
 
+    /// Verifies inline mode succeeds when LUTs do not contain tip account.
+    #[test]
+    fn tip_account_not_in_lut_is_accepted() {
+        let payer = Keypair::new();
+        let lut = AddressLookupTableAccount {
+            key: Pubkey::new_unique(),
+            addresses: vec![Pubkey::new_unique(), Pubkey::new_unique()],
+        };
+        let luts = [lut];
+        let inputs = make_bundle_inputs(TestBundleParams {
+            payer: &payer,
+            tx_count: 5,
+            blockhash: Hash::default(),
+            luts: &luts,
+            jdf: None,
+            tip: 100_000,
+        });
+        let bundle = assert_build_ok(BundleBuilder::build(inputs));
+        assert!(matches!(bundle.tip_mode, TipMode::InlineLastTx));
+    }
+
+    /// Verifies compaction preserves last slot used for inline tip append.
     #[test]
     fn tip_appended_to_last_populated_slot_even_with_gaps() {
         let payer = Keypair::new();
@@ -393,6 +503,7 @@ mod bundle_builder_tests {
         );
     }
 
+    /// Verifies JDF account is not duplicated if already present.
     #[test]
     fn jitodontfront_not_duplicated_if_already_present() {
         let payer = Keypair::new();

@@ -10,11 +10,14 @@ use solana_pubkey::Pubkey;
 pub struct TipHelper;
 
 impl TipHelper {
+    // --- Tip Account / Instruction ---
+    /// Picks a random Jito tip account from known constants.
     pub fn get_random_tip_account() -> Pubkey {
         let index = rand::rng().random_range(0..JITO_TIP_ACCOUNTS.len());
         JITO_TIP_ACCOUNTS[index]
     }
 
+    /// Creates a system transfer instruction for the tip payment.
     pub fn create_tip_instruction_to(
         payer: &Pubkey,
         tip_account: &Pubkey,
@@ -32,6 +35,8 @@ impl TipHelper {
         }
     }
 
+    // --- Tip Resolution ---
+    /// Fetches current tip floor data and returns computed lamports.
     pub async fn fetch_tip_floor(
         client: &Client,
         tip_floor_url: &str,
@@ -68,6 +73,7 @@ impl TipHelper {
         Ok((tip_in_lamports, tip_data.clone()))
     }
 
+    /// Resolves effective tip amount for the provided strategy.
     pub async fn resolve_tip(
         client: &Client,
         tip_floor_url: &str,
@@ -92,6 +98,7 @@ impl TipHelper {
         }
     }
 
+    /// Converts EMA 50th percentile SOL tip value into lamports.
     fn compute_tip_floor_lamports(tip_data: &JitoTipFloorResponse) -> u64 {
         let tip_float = (tip_data.ema_landed_tips_50th_percentile * 1e9).ceil();
         if tip_float.is_sign_negative() || tip_float.is_nan() {
@@ -101,6 +108,7 @@ impl TipHelper {
         }
     }
 
+    /// Applies strategy transforms such as min/max clamping.
     fn apply_floor_strategy(tip: u64, strategy: &TipStrategy) -> u64 {
         match strategy {
             TipStrategy::Fixed(lamports) => *lamports,
@@ -115,6 +123,7 @@ mod tests {
     use super::*;
     use crate::constants::{DEFAULT_TIP_LAMPORTS, MAX_TIP_LAMPORTS};
 
+    /// Builds a synthetic tip-floor payload for strategy tests.
     fn make_tip_floor(ema_50th: f64) -> JitoTipFloorResponse {
         JitoTipFloorResponse {
             time: "2024-01-01T00:00:00Z".to_string(),
@@ -127,6 +136,7 @@ mod tests {
         }
     }
 
+    /// Verifies random tip account selection always returns known accounts.
     #[test]
     fn random_tip_account_is_valid() {
         for _ in 0..100 {
@@ -135,6 +145,7 @@ mod tests {
         }
     }
 
+    /// Verifies raw floor strategy does not apply min/max clamping.
     #[test]
     fn fetch_floor_does_not_clamp_by_default() {
         let tip_data = make_tip_floor(20.0);
@@ -142,6 +153,7 @@ mod tests {
         assert_eq!(tip, 20_000_000_000);
     }
 
+    /// Verifies invalid floor values are coerced to zero lamports.
     #[test]
     fn fetch_floor_negative_or_nan_returns_zero() {
         let negative = make_tip_floor(-0.1);
@@ -153,6 +165,7 @@ mod tests {
         assert_eq!(tip, 0);
     }
 
+    /// Verifies capped floor strategy applies both min and max bounds.
     #[test]
     fn fetch_floor_with_cap_applies_min_max() {
         let tip = 20_000_000_000;

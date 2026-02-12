@@ -5,23 +5,34 @@ use solana_sdk::address_lookup_table::AddressLookupTableAccount;
 use solana_sdk::transaction::VersionedTransaction;
 use std::collections::HashSet;
 
+/// Serialized-size details for a compiled transaction.
 #[derive(Debug)]
 pub struct TransactionSizeInfo {
+    /// Serialized transaction size in bytes.
     pub size: usize,
+    /// Maximum allowed Solana transaction size in bytes.
     pub max_size: usize,
+    /// Whether serialized size exceeds `max_size`.
     pub is_oversized: bool,
 }
 
+/// Summary of accounts missing from provided lookup tables.
 #[derive(Debug)]
 pub struct AccountsNotInLuts {
+    /// Accounts referenced by instructions but absent from LUTs.
     pub accounts: Vec<Pubkey>,
+    /// Total unique accounts referenced by instructions.
     pub total_accounts: usize,
+    /// Number of referenced accounts found in LUTs.
     pub accounts_in_luts: usize,
 }
 
+/// Helpers for transaction size and LUT diagnostics.
 pub struct TransactionAnalysis;
 
 impl TransactionAnalysis {
+    // --- Size Analysis ---
+    /// Computes serialized transaction size and max-size compliance.
     pub fn analyze_transaction_size(tx: &VersionedTransaction) -> TransactionSizeInfo {
         let size = bincode::serialize(tx).map_or(0, |s| s.len());
         TransactionSizeInfo {
@@ -31,6 +42,8 @@ impl TransactionAnalysis {
         }
     }
 
+    // --- LUT Analysis ---
+    /// Returns accounts referenced by instructions but missing from LUTs.
     pub fn get_accounts_not_in_luts(
         instructions: &[Instruction],
         lookup_tables: &[AddressLookupTableAccount],
@@ -58,6 +71,8 @@ impl TransactionAnalysis {
         }
     }
 
+    // --- Logging Helpers ---
+    /// Logs serialized transaction size diagnostics.
     pub fn log_transaction_size_warning(tx: &VersionedTransaction, tx_index: usize) {
         let size_info = Self::analyze_transaction_size(tx);
         if size_info.is_oversized {
@@ -77,6 +92,7 @@ impl TransactionAnalysis {
         }
     }
 
+    /// Logs which accounts are present or missing in provided LUTs.
     pub fn log_accounts_not_in_luts(
         instructions: &[Instruction],
         lookup_tables: &[AddressLookupTableAccount],
@@ -104,6 +120,7 @@ impl TransactionAnalysis {
         }
     }
 
+    /// Logs full bundle diagnostics for post-failure debugging.
     pub fn log_bundle_failure_analysis(
         transactions: &[VersionedTransaction],
         all_instructions: &[Option<Vec<Instruction>>],
@@ -132,6 +149,7 @@ mod tests {
     use solana_instruction::AccountMeta;
     use solana_pubkey::Pubkey;
 
+    /// Verifies failure analysis handles sparse optional instruction slots.
     #[test]
     fn log_bundle_failure_analysis_handles_option_slots() {
         let ix = Instruction {

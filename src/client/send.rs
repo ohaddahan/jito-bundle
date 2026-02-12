@@ -7,16 +7,20 @@ use serde::Serialize;
 use solana_sdk::transaction::VersionedTransaction;
 
 impl JitoBundler {
+    // --- Bundle Sending ---
+    /// Builds the Jito explorer URL for a bundle id.
     pub fn get_jito_explorer_url(bundle_id: &str) -> String {
         format!("{JITO_EXPLORER_URL}/{bundle_id}")
     }
 
+    /// Encodes versioned transactions as base64 strings.
     pub fn encode_transactions(
         transactions: &[VersionedTransaction],
     ) -> Result<Vec<String>, JitoError> {
         Self::encode_transactions_base64(transactions)
     }
 
+    /// Extracts base58 signatures from compiled transactions.
     pub fn extract_signatures(transactions: &[VersionedTransaction]) -> Vec<String> {
         transactions
             .iter()
@@ -24,6 +28,7 @@ impl JitoBundler {
             .collect()
     }
 
+    /// Sends a built bundle with endpoint retry fallback.
     pub async fn send_bundle(&self, bundle: &BuiltBundle) -> Result<BundleResult, JitoError> {
         let encoded_txs = Self::encode_transactions_base64(&bundle.transactions)?;
         let signatures = Self::extract_signatures(&bundle.transactions);
@@ -54,6 +59,7 @@ impl JitoBundler {
         })
     }
 
+    /// Sends a bundle request to a single block-engine endpoint.
     async fn send_bundle_to_endpoint(
         &self,
         endpoint: &str,

@@ -8,6 +8,8 @@ use serde::de::DeserializeOwned;
 use solana_sdk::transaction::VersionedTransaction;
 
 impl JitoBundler {
+    // --- Shared RPC Utilities ---
+    /// Sends a JSON-RPC POST request and returns status + raw response body.
     pub async fn send_json_rpc_request<Req: Serialize>(
         &self,
         request_builder: RequestBuilder,
@@ -29,6 +31,7 @@ impl JitoBundler {
         Ok((status, response_text))
     }
 
+    /// Parses a JSON-RPC response and extracts `result` or mapped error.
     pub fn parse_json_rpc_result<Res: DeserializeOwned>(
         response_text: &str,
         context: &str,
@@ -52,6 +55,7 @@ impl JitoBundler {
         })
     }
 
+    /// Serializes and base64-encodes all versioned transactions.
     pub fn encode_transactions_base64(
         transactions: &[VersionedTransaction],
     ) -> Result<Vec<String>, JitoError> {

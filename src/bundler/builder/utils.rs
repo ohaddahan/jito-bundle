@@ -16,12 +16,15 @@ use solana_sdk::signature::Signer;
 use solana_sdk::transaction::VersionedTransaction;
 
 impl BundleSlotView for BundleBuilder<'_> {
+    /// Returns the mutable builder's current instruction slots view.
     fn instruction_slots(&self) -> &BundleInstructionSlots {
         &self.transactions_instructions
     }
 }
 
 impl<'a> BundleBuilder<'a> {
+    // --- Construction ---
+    /// Creates a builder from validated build inputs.
     fn new(inputs: BundleBuilderInputs<'a>) -> Self {
         let BundleBuilderInputs {
             payer,
@@ -46,6 +49,18 @@ impl<'a> BundleBuilder<'a> {
         }
     }
 
+    // --- Build Pipeline ---
+    /// Builds a final `BuiltBundle` from fixed instruction slots.
+    ///
+    /// Build flow:
+    /// 1. Compact sparse slots while preserving transaction order.
+    /// 2. Optionally apply `jitodontfront` account rewriting.
+    /// 3. Insert tip as separate tx (<5) or inline (==5).
+    /// 4. Validate tip account is not in LUTs for inline mode.
+    /// 5. Compile, sign, and size-check each transaction.
+    ///
+    /// Returns `JitoError` for invalid bundle size, compile/sign failures,
+    /// oversized transactions, and invalid LUT tip-account usage.
     pub fn build(inputs: BundleBuilderInputs<'a>) -> Result<BuiltBundle, JitoError> {
         let mut builder = Self::new(inputs);
         builder.compact_transactions();
@@ -91,6 +106,7 @@ impl<'a> BundleBuilder<'a> {
         ))
     }
 
+    /// Compacts sparse slots while preserving transaction order.
     fn compact_transactions(&mut self) {
         let mut new_slots = empty_instruction_slots();
         let mut idx = 0;
@@ -105,6 +121,7 @@ impl<'a> BundleBuilder<'a> {
         self.transactions_instructions = new_slots;
     }
 
+    /// Appends the tip as a dedicated transaction.
     fn append_tip_transaction(&mut self) -> Result<(), JitoError> {
         let tip_ix = TipHelper::create_tip_instruction_to(
             &self.payer.pubkey(),
@@ -122,6 +139,7 @@ impl<'a> BundleBuilder<'a> {
         Ok(())
     }
 
+    /// Appends the tip instruction to the last populated transaction.
     fn append_tip_instruction(&mut self) {
         let tip_ix = TipHelper::create_tip_instruction_to(
             &self.payer.pubkey(),
@@ -135,6 +153,7 @@ impl<'a> BundleBuilder<'a> {
         }
     }
 
+    /// Rewrites `jitodontfront` account usage in-place.
     fn apply_jitodont_front(&mut self, jitodontfront_pubkey: &Pubkey) {
         for ixs in self.transactions_instructions.iter_mut().flatten() {
             for instruction in ixs.iter_mut() {
@@ -152,6 +171,7 @@ impl<'a> BundleBuilder<'a> {
         }
     }
 
+    /// Compiles and signs one versioned transaction from instruction list.
     fn build_versioned_transaction(
         &self,
         index: usize,
@@ -203,6 +223,7 @@ impl<'a> BundleBuilder<'a> {
         Ok(txn)
     }
 
+    /// Ensures the chosen tip account is not present in provided LUTs.
     fn validate_tip_not_in_luts(
         tip_account: &Pubkey,
         lookup_tables: &[AddressLookupTableAccount],

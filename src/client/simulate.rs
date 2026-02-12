@@ -9,6 +9,8 @@ use solana_client::rpc_config::RpcSimulateTransactionConfig;
 use solana_sdk::commitment_config::CommitmentConfig;
 
 impl JitoBundler {
+    // --- Simulation ---
+    /// Simulates each transaction individually via standard Solana RPC.
     pub async fn simulate_per_transaction(&self, bundle: &BuiltBundle) -> Result<(), JitoError> {
         for (i, tx) in bundle.transactions.iter().enumerate() {
             let sig = bs58::encode(&tx.signatures[0]).into_string();
@@ -50,6 +52,7 @@ impl JitoBundler {
         Ok(())
     }
 
+    /// Simulates the full atomic bundle through Helius `simulateBundle`.
     pub async fn simulate_bundle_helius(
         &self,
         bundle: &BuiltBundle,

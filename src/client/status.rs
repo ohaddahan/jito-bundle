@@ -9,6 +9,8 @@ use std::str::FromStr;
 use std::time::Duration;
 
 impl JitoBundler {
+    // --- Status Polling ---
+    /// Fetches current bundle status from Jito block engine.
     pub async fn get_bundle_status(&self, bundle_id: &str) -> BundleStatus {
         let endpoint = self.config.network.block_engine_url();
         let request = JsonRpcRequest {
@@ -56,6 +58,7 @@ impl JitoBundler {
         BundleStatus::Unknown
     }
 
+    /// Polls signature statuses until all bundle transactions land or fail.
     pub async fn wait_for_landing_on_chain(
         &self,
         signatures: &[String],
@@ -108,6 +111,7 @@ impl JitoBundler {
         })
     }
 
+    /// Polls Jito bundle status endpoint until final status or timeout.
     pub async fn wait_for_landing_via_jito(
         &self,
         bundle_id: &str,

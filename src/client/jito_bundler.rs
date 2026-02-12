@@ -11,13 +11,19 @@ use solana_sdk::address_lookup_table::AddressLookupTableAccount;
 use solana_sdk::signer::keypair::Keypair;
 use std::time::Duration;
 
+/// High-level facade for building, simulating, and sending Jito bundles.
 pub struct JitoBundler {
+    /// Runtime bundler configuration.
     pub config: JitoConfig,
+    /// Shared HTTP client for Jito/Helius requests.
     pub http_client: Client,
+    /// Solana RPC client for chain reads and simulations.
     pub rpc_client: RpcClient,
 }
 
 impl JitoBundler {
+    // --- Construction ---
+    /// Creates a bundler client from configuration.
     pub fn new(config: JitoConfig) -> Result<Self, JitoError> {
         let http_client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -33,6 +39,8 @@ impl JitoBundler {
         })
     }
 
+    // --- HTTP Helpers ---
+    /// Builds a JSON POST request with Jito auth headers when configured.
     pub fn jito_post(&self, url: &str) -> reqwest::RequestBuilder {
         let full_url = if let Some(uuid) = &self.config.uuid
             && !self.config.network.is_custom()
@@ -52,11 +60,21 @@ impl JitoBundler {
         builder
     }
 
+    // --- Bundle Lifecycle ---
+    /// Resolves the tip amount according to configured strategy.
     pub async fn fetch_tip(&self) -> Result<u64, JitoError> {
         let tip_floor_url = self.config.network.tip_floor_url();
         TipHelper::resolve_tip(&self.http_client, tip_floor_url, &self.config.tip_strategy).await
     }
 
+    /// Builds a signed `BuiltBundle` from fixed instruction slots.
+    ///
+    /// Steps:
+    /// 1. Resolve the tip amount using configured `TipStrategy`.
+    /// 2. Fetch a fresh recent blockhash from RPC.
+    /// 3. Build and sign transactions via `BundleBuilder::build`.
+    ///
+    /// Returns `JitoError` when tip resolution, blockhash fetch, or compilation fails.
     pub async fn build_bundle(
         &self,
         input: BuildBundleOptions<'_>,
@@ -84,6 +102,7 @@ impl JitoBundler {
         Ok(bundle)
     }
 
+    /// Simulates the built bundle against configured Helius RPC.
     pub async fn simulate_helius(
         &self,
         bundle: &BuiltBundle,
@@ -98,6 +117,12 @@ impl JitoBundler {
         self.simulate_bundle_helius(bundle, helius_url).await
     }
 
+    /// Optionally simulates, sends, and confirms the bundle on-chain.
+    ///
+    /// Behavior:
+    /// 1. If `helius_rpc_url` is configured, run atomic simulation first.
+    /// 2. Submit bundle with endpoint retry.
+    /// 3. Poll on-chain signatures until landed/failed/timeout.
     pub async fn send_and_confirm(&self, bundle: &BuiltBundle) -> Result<BundleResult, JitoError> {
         if let Some(helius_url) = &self.config.helius_rpc_url
             && let Err(e) = self.simulate_bundle_helius(bundle, helius_url).await
@@ -117,6 +142,7 @@ impl JitoBundler {
         Ok(result)
     }
 
+    /// Maps raw landing status into final client-facing success/error.
     fn interpret_landing_status(
         status: Result<BundleStatus, JitoError>,
         max_attempts: u32,
@@ -135,8 +161,12 @@ impl JitoBundler {
     }
 }
 
+/// Input arguments for `JitoBundler::build_bundle`.
 pub struct BuildBundleOptions<'a> {
+    /// Signing payer used for all transactions.
     pub payer: &'a Keypair,
+    /// Fixed instruction slots (max 5) used for bundle creation.
     pub transactions_instructions: BundleInstructionSlots,
+    /// Lookup tables used when compiling transactions.
     pub lookup_tables: &'a [AddressLookupTableAccount],
 }
