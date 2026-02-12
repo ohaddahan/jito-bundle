@@ -4,6 +4,8 @@ Standalone Rust library for submitting [Jito Bundles](https://docs.jito.wtf/) on
 
 Submit up to 5 transactions that execute atomically and in order. The library handles tip calculation, bundle construction, simulation, endpoint retry, and on-chain confirmation.
 
+Jito Bundle Explorer: [https://explorer.jito.wtf/](https://explorer.jito.wtf/)
+
 ## Features
 
 - Atomic bundle construction from fixed-size `BundleInstructionSlots` input.
