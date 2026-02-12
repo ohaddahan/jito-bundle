@@ -24,6 +24,7 @@ pub const JITO_TIP_ACCOUNTS: [Pubkey; 8] = [
 pub const DEFAULT_TIP_LAMPORTS: u64 = 100_000;
 pub const MAX_TIP_LAMPORTS: u64 = 10_000_000;
 
+/// Hard Jito protocol limit: bundles may contain at most 5 transactions.
 pub const MAX_BUNDLE_TRANSACTIONS: usize = 5;
 
 pub const SOLANA_MAX_TX_SIZE: usize = 1232;

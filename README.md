@@ -105,13 +105,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Bundle Rules
 
-1. Max 5 transactions per bundle.
+1. Max 5 transactions per bundle (hard Jito bundle limit).
 2. Slots are compacted before build (gaps removed, order preserved).
-3. `jitodontfront` account is injected into the first instruction when configured.
+3. `jitodontfront` is enforced only in the first transaction; existing `jitodontfront*` accounts are removed by prefix match because the suffix can vary.
 4. Tip instruction is always the final instruction of the final transaction.
-5. If bundle has fewer than 5 transactions, tip is a separate transaction.
-6. If bundle has 5 transactions, tip is appended inline to the last transaction.
-7. Inline tip mode rejects LUTs that contain the chosen tip account.
+5. If bundle has fewer than 5 transactions, tip is added as a separate transaction (uses remaining capacity).
+6. If bundle already has 5 transactions, tip is appended inline to the last transaction (cannot add a 6th transaction).
+7. If the chosen tip account is present in a lookup table for inline mode, Jito bundle execution fails, so build rejects it.
 8. Compute budget instruction is prepended to every transaction.
 
 ## Error Handling

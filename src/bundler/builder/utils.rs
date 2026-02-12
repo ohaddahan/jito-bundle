@@ -52,10 +52,13 @@ impl<'a> BundleBuilder<'a> {
     // --- Build Pipeline ---
     /// Builds a final `BuiltBundle` from fixed instruction slots.
     ///
+    /// Jito hard-limits bundles to `MAX_BUNDLE_TRANSACTIONS` (5), so this builder
+    /// chooses tip placement based on remaining transaction capacity.
+    ///
     /// Build flow:
     /// 1. Compact sparse slots while preserving transaction order.
     /// 2. Optionally apply `jitodontfront` account rewriting.
-    /// 3. Insert tip as separate tx (<5) or inline (==5).
+    /// 3. Insert tip as separate tx when count < 5, or inline when count == 5.
     /// 4. Validate tip account is not in LUTs for inline mode.
     /// 5. Compile, sign, and size-check each transaction.
     ///
@@ -121,7 +124,7 @@ impl<'a> BundleBuilder<'a> {
         self.transactions_instructions = new_slots;
     }
 
-    /// Appends the tip as a dedicated transaction.
+    /// Appends the tip as a dedicated transaction when the bundle has room (< 5 txs).
     fn append_tip_transaction(&mut self) -> Result<(), JitoError> {
         let tip_ix = TipHelper::create_tip_instruction_to(
             &self.payer.pubkey(),
@@ -139,7 +142,7 @@ impl<'a> BundleBuilder<'a> {
         Ok(())
     }
 
-    /// Appends the tip instruction to the last populated transaction.
+    /// Appends the tip instruction to the last populated transaction when already at 5 txs.
     fn append_tip_instruction(&mut self) {
         let tip_ix = TipHelper::create_tip_instruction_to(
             &self.payer.pubkey(),
@@ -153,7 +156,10 @@ impl<'a> BundleBuilder<'a> {
         }
     }
 
-    /// Rewrites `jitodontfront` account usage in-place.
+    /// Rewrites `jitodontfront` account usage so it appears only in the first transaction.
+    ///
+    /// The expected pubkey prefix is `jitodontfront`, while the suffix can vary,
+    /// so matching uses string prefix rather than exact full-string equality.
     fn apply_jitodont_front(&mut self, jitodontfront_pubkey: &Pubkey) {
         for ixs in self.transactions_instructions.iter_mut().flatten() {
             for instruction in ixs.iter_mut() {
@@ -224,6 +230,9 @@ impl<'a> BundleBuilder<'a> {
     }
 
     /// Ensures the chosen tip account is not present in provided LUTs.
+    ///
+    /// If the tip account appears in a LUT for inline-tip mode, Jito bundle execution
+    /// will fail, so this is validated pre-send.
     fn validate_tip_not_in_luts(
         tip_account: &Pubkey,
         lookup_tables: &[AddressLookupTableAccount],
