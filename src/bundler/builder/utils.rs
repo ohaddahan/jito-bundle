@@ -149,7 +149,7 @@ impl<'a> BundleBuilder<'a> {
             &self.tip_account,
             self.tip_lamports,
         );
-        if let Some(last_idx) = BundleSlotView::last_populated_index(self)
+        if let Some(last_idx) = self.last_populated_index()
             && let Some(ixs) = &mut self.transactions_instructions[last_idx]
         {
             ixs.push(tip_ix);
