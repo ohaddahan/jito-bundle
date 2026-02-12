@@ -1,7 +1,10 @@
 use crate::JitoError;
 use crate::analysis::TransactionAnalysis;
 use crate::bundler::builder::types::{BundleBuilder, BundleBuilderInputs};
-use crate::bundler::bundle::types::Bundle;
+use crate::bundler::bundle::types::BuiltBundle;
+use crate::bundler::types::{
+    BundleInstructionSlots, BundleSlotView, TipMode, empty_instruction_slots,
+};
 use crate::constants::MAX_BUNDLE_TRANSACTIONS;
 use crate::tip::TipHelper;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -11,6 +14,12 @@ use solana_sdk::address_lookup_table::AddressLookupTableAccount;
 use solana_sdk::message::{VersionedMessage, v0};
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::VersionedTransaction;
+
+impl BundleSlotView for BundleBuilder<'_> {
+    fn instruction_slots(&self) -> &BundleInstructionSlots {
+        &self.transactions_instructions
+    }
+}
 
 impl<'a> BundleBuilder<'a> {
     fn new(inputs: BundleBuilderInputs<'a>) -> Self {
@@ -25,8 +34,6 @@ impl<'a> BundleBuilder<'a> {
         } = inputs;
         let tip_account = TipHelper::get_random_tip_account();
         Self {
-            versioned_transaction: vec![],
-            tip_account,
             payer,
             transactions_instructions,
             lookup_tables,
@@ -34,11 +41,12 @@ impl<'a> BundleBuilder<'a> {
             tip_lamports,
             jitodontfront_pubkey,
             compute_unit_limit,
-            last_txn_is_tip: false,
+            tip_account,
+            tip_mode: TipMode::InlineLastTx,
         }
     }
 
-    pub fn build(inputs: BundleBuilderInputs<'a>) -> Result<Bundle<'a>, JitoError> {
+    pub fn build(inputs: BundleBuilderInputs<'a>) -> Result<BuiltBundle, JitoError> {
         let mut builder = Self::new(inputs);
         builder.compact_transactions();
         let count = builder.populated_count();
@@ -52,12 +60,18 @@ impl<'a> BundleBuilder<'a> {
 
         if count < MAX_BUNDLE_TRANSACTIONS {
             builder.append_tip_transaction()?;
+            builder.tip_mode = TipMode::SeparateTx;
         } else {
             builder.append_tip_instruction();
+            builder.tip_mode = TipMode::InlineLastTx;
+        }
+
+        if matches!(builder.tip_mode, TipMode::InlineLastTx) {
+            Self::validate_tip_not_in_luts(&builder.tip_account, builder.lookup_tables)?;
         }
 
         let total = builder.populated_count();
-        let mut versioned = Vec::with_capacity(total);
+        let mut transactions = Vec::with_capacity(total);
         for (compiled_index, ixs) in builder
             .transactions_instructions
             .iter()
@@ -65,24 +79,20 @@ impl<'a> BundleBuilder<'a> {
             .enumerate()
         {
             let txn = builder.build_versioned_transaction(compiled_index, total, ixs)?;
-            versioned.push(txn);
+            transactions.push(txn);
         }
-        builder.versioned_transaction = versioned;
-        if !builder.last_txn_is_tip {
-            Self::validate_tip_not_in_luts(&builder.tip_account, builder.lookup_tables)?;
-        }
-        Ok(builder.into())
-    }
 
-    fn populated_count(&self) -> usize {
-        self.transactions_instructions
-            .iter()
-            .filter(|slot| slot.is_some())
-            .count()
+        Ok(BuiltBundle::new(
+            transactions,
+            builder.tip_account,
+            builder.tip_lamports,
+            builder.tip_mode,
+            builder.transactions_instructions,
+        ))
     }
 
     fn compact_transactions(&mut self) {
-        let mut new_slots: [Option<Vec<Instruction>>; 5] = std::array::from_fn(|_| None);
+        let mut new_slots = empty_instruction_slots();
         let mut idx = 0;
         for slot in &mut self.transactions_instructions {
             if let Some(ixs) = slot.take()
@@ -109,14 +119,7 @@ impl<'a> BundleBuilder<'a> {
                 count: MAX_BUNDLE_TRANSACTIONS,
             })?;
         self.transactions_instructions[first_none] = Some(vec![tip_ix]);
-        self.last_txn_is_tip = true;
         Ok(())
-    }
-
-    pub fn last_populated_index(&self) -> Option<usize> {
-        self.transactions_instructions
-            .iter()
-            .rposition(|slot| slot.is_some())
     }
 
     fn append_tip_instruction(&mut self) {
@@ -125,7 +128,7 @@ impl<'a> BundleBuilder<'a> {
             &self.tip_account,
             self.tip_lamports,
         );
-        if let Some(last_idx) = self.last_populated_index()
+        if let Some(last_idx) = BundleSlotView::last_populated_index(self)
             && let Some(ixs) = &mut self.transactions_instructions[last_idx]
         {
             ixs.push(tip_ix);
@@ -160,11 +163,12 @@ impl<'a> BundleBuilder<'a> {
         let mut instructions = vec![compute_budget];
         instructions.extend_from_slice(tx_instructions);
 
-        let lut: &[AddressLookupTableAccount] = if index == total - 1 && self.last_txn_is_tip {
-            &[]
-        } else {
-            self.lookup_tables
-        };
+        let lut: &[AddressLookupTableAccount] =
+            if index == total - 1 && matches!(self.tip_mode, TipMode::SeparateTx) {
+                &[]
+            } else {
+                self.lookup_tables
+            };
 
         let message = v0::Message::try_compile(
             &self.payer.pubkey(),

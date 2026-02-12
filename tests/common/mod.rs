@@ -1,5 +1,5 @@
 use jito_bundle::bundler::bundle::types::BuiltBundle;
-use jito_bundle::bundler::types::{BundleInstructionSlots, TipMode};
+use jito_bundle::bundler::types::{BundleInstructionSlots, BundleSlotView, TipMode};
 use jito_bundle::config::jito::JitoConfig;
 use jito_bundle::config::network::Network;
 use jito_bundle::constants::DEFAULT_TIP_LAMPORTS;

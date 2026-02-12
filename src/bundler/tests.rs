@@ -3,7 +3,7 @@ mod bundle_builder_tests {
     use crate::JitoError;
     use crate::bundler::builder::types::{BundleBuilder, BundleBuilderInputs};
     use crate::bundler::bundle::types::BuiltBundle;
-    use crate::bundler::types::TipMode;
+    use crate::bundler::types::{BundleSlotView, TipMode};
     use crate::constants::{JITO_TIP_ACCOUNTS, SOLANA_MAX_TX_SIZE, SYSTEM_PROGRAM_ID};
     use solana_instruction::{AccountMeta, Instruction};
     use solana_pubkey::Pubkey;

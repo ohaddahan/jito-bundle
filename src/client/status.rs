@@ -3,7 +3,6 @@ use crate::client::types::StatusResult;
 use crate::constants::DEFAULT_INITIAL_CONFIRM_DELAY_SECS;
 use crate::error::JitoError;
 use crate::types::{BundleStatus, JsonRpcRequest};
-use serde::Deserialize;
 use solana_sdk::signature::Signature;
 use solana_transaction_status_client_types::TransactionConfirmationStatus;
 use std::str::FromStr;
