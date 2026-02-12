@@ -7,15 +7,14 @@ use solana_sdk::signature::Signer;
 #[tokio::test]
 #[ignore = "requires .env with KEYPAIR_PATH and RPC_URL"]
 async fn build_memo_bundle_succeeds() {
-    let Some(env) = common::load_test_env() else {
-        return;
-    };
+    let env =
+        common::load_test_env().expect("missing required .env values: KEYPAIR_PATH and RPC_URL");
 
     let rpc = RpcClient::new(env.rpc_url);
-    let blockhash = rpc.get_latest_blockhash().await.ok();
-    let Some(blockhash) = blockhash else {
-        return;
-    };
+    let blockhash = rpc
+        .get_latest_blockhash()
+        .await
+        .expect("failed to fetch latest blockhash");
 
     let payer_pubkey = env.keypair.pubkey();
     let slots = common::build_memo_slots(
@@ -32,12 +31,7 @@ async fn build_memo_bundle_succeeds() {
         jitodontfront_pubkey: None,
         compute_unit_limit: DEFAULT_COMPUTE_UNIT_LIMIT,
     };
-    let result = BundleBuilder::build(inputs);
-    assert!(result.is_ok(), "bundle build failed");
-    let bundle = match result {
-        Ok(b) => b,
-        Err(_) => return,
-    };
+    let bundle = BundleBuilder::build(inputs).expect("bundle build failed");
     common::print_bundle_info("build_memo_bundle", &bundle);
     assert_eq!(bundle.transactions.len(), 3);
     for (i, tx) in bundle.transactions.iter().enumerate() {

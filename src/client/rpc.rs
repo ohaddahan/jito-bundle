@@ -69,4 +69,55 @@ impl JitoBundler {
             })
             .collect()
     }
+
+    /// Returns the first transaction signature as base58, or a typed error when absent.
+    pub fn first_signature_base58(
+        tx: &VersionedTransaction,
+        tx_index: usize,
+        context: &str,
+    ) -> Result<String, JitoError> {
+        let signature = tx
+            .signatures
+            .first()
+            .ok_or_else(|| JitoError::InvalidSignature {
+                reason: format!("{context}: transaction {tx_index} has no signatures"),
+            })?;
+        Ok(bs58::encode(signature).into_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solana_sdk::message::{Message, VersionedMessage};
+    use solana_sdk::signature::Signature;
+
+    /// Creates a minimal versioned transaction with caller-provided signatures.
+    fn make_tx(signatures: Vec<Signature>) -> VersionedTransaction {
+        let message = Message::new(&[], None);
+        VersionedTransaction {
+            signatures,
+            message: VersionedMessage::Legacy(message),
+        }
+    }
+
+    #[test]
+    fn first_signature_base58_returns_error_when_missing() {
+        let tx = make_tx(vec![]);
+        let result = JitoBundler::first_signature_base58(&tx, 2, "send_bundle");
+        assert!(
+            matches!(result, Err(JitoError::InvalidSignature { .. })),
+            "expected InvalidSignature, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn first_signature_base58_returns_encoded_signature() {
+        let signature = Signature::default();
+        let tx = make_tx(vec![signature]);
+        let result = JitoBundler::first_signature_base58(&tx, 0, "simulate");
+        assert!(result.is_ok(), "expected Ok signature, got {result:?}");
+        let encoded = result.unwrap_or_default();
+        assert_eq!(encoded, bs58::encode(signature).into_string());
+    }
 }

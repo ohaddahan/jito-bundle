@@ -5,17 +5,10 @@ use solana_sdk::signature::Signer;
 #[tokio::test]
 #[ignore = "requires .env with KEYPAIR_PATH and RPC_URL; sends real bundle to mainnet"]
 async fn send_memo_bundle_succeeds() {
-    let Some(env) = common::load_test_env() else {
-        return;
-    };
+    let env =
+        common::load_test_env().expect("missing required .env values: KEYPAIR_PATH and RPC_URL");
     let config = common::build_jito_config(&env);
-    let bundler = match JitoBundler::new(config) {
-        Ok(b) => b,
-        Err(e) => {
-            println!("failed to create bundler: {e}");
-            return;
-        }
-    };
+    let bundler = JitoBundler::new(config).expect("failed to create JitoBundler");
     let payer_pubkey = env.keypair.pubkey();
     let slots = common::build_memo_slots(
         &payer_pubkey,
@@ -47,5 +40,8 @@ async fn send_memo_bundle_succeeds() {
     };
 
     common::print_bundle_result("send_memo_bundle", &result);
-    assert!(result.success, "bundle was not successful");
+    assert!(
+        !result.bundle_id.is_empty(),
+        "bundle_id should not be empty on success"
+    );
 }

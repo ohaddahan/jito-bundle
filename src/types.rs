@@ -80,18 +80,14 @@ impl std::fmt::Debug for BundleStatus {
 }
 
 /// Result returned after bundle submission.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BundleResult {
-    /// Whether submission succeeded.
-    pub success: bool,
-    /// Returned bundle id when submission succeeds.
-    pub bundle_id: Option<String>,
-    /// Error message when submission fails.
-    pub error: Option<String>,
+    /// Returned bundle id.
+    pub bundle_id: String,
     /// Transaction signatures from submitted bundle.
     pub signatures: Vec<String>,
     /// Explorer URL for bundle status.
-    pub explorer_url: Option<String>,
+    pub explorer_url: String,
 }
 
 /// Parameters for Helius `simulateBundle` call.

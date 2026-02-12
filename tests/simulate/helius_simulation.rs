@@ -8,21 +8,19 @@ use solana_sdk::signature::Signer;
 #[tokio::test]
 #[ignore = "requires .env with KEYPAIR_PATH and RPC_URL"]
 async fn simulate_memo_bundle_on_helius() {
-    let Some(env) = common::load_test_env() else {
-        return;
-    };
-    let Some(helius_url) = &env.helius_url else {
-        return;
-    };
+    let env =
+        common::load_test_env().expect("missing required .env values: KEYPAIR_PATH and RPC_URL");
+    let helius_url = env
+        .helius_url
+        .as_ref()
+        .expect("missing HELIUS_RPC_URL for simulation test");
     let config = JitoConfig::new(&env.rpc_url).with_helius_rpc_url(helius_url);
-    let bundler = match JitoBundler::new(config) {
-        Ok(b) => b,
-        Err(_) => return,
-    };
-    let blockhash = bundler.rpc_client.get_latest_blockhash().await.ok();
-    let Some(blockhash) = blockhash else {
-        return;
-    };
+    let bundler = JitoBundler::new(config).expect("failed to create JitoBundler");
+    let blockhash = bundler
+        .rpc_client
+        .get_latest_blockhash()
+        .await
+        .expect("failed to fetch latest blockhash");
     let payer_pubkey = env.keypair.pubkey();
     let slots =
         common::build_memo_slots(&payer_pubkey, &["helius sim test 1", "helius sim test 2"]);
@@ -35,10 +33,7 @@ async fn simulate_memo_bundle_on_helius() {
         jitodontfront_pubkey: None,
         compute_unit_limit: DEFAULT_COMPUTE_UNIT_LIMIT,
     };
-    let bundle = match BundleBuilder::build(inputs) {
-        Ok(b) => b,
-        Err(_) => return,
-    };
+    let bundle = BundleBuilder::build(inputs).expect("bundle build failed");
     common::print_bundle_info("simulate_memo_bundle_on_helius", &bundle);
     let sim_result = bundler.simulate_helius(&bundle).await;
     assert!(

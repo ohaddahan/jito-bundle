@@ -1,2 +1,2 @@
 #!/bin/bash
-cargo nextest run --test main --run-ignored all
+cargo nextest run --features live-tests --test main --run-ignored all

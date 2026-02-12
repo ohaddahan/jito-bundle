@@ -1,7 +1,8 @@
 [package]
 name = "jito-bundle"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 authors = ["ohaddahan@gmail.com"]
 description = "Rust client for Jito bundle"
@@ -13,6 +14,10 @@ exclude = [
   "scripts/*",
   ".env*",
 ]
+
+[features]
+default = []
+live-tests = []
 
 [dependencies]
 base64 = "0.22"

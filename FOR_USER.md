@@ -29,19 +29,65 @@ You (caller)
 └────────────────┘
 ```
 
-Under the hood, `JitoBundler` is the single struct that owns all resources (HTTP client, RPC client, config). Its implementation is **split across multiple files** — each file adds a group of related methods via separate `impl JitoBundler` blocks. Two standalone helpers also exist:
+Under the hood, `JitoBundler` is the single struct that owns all resources (HTTP client, RPC client, config). Its implementation is **split across multiple files** — each file adds a group of related methods via separate `impl JitoBundler` blocks.
+
+### The Three Layers
+
+**Layer 1: Configuration** (`config/`)
+- `JitoConfig` — builder pattern struct with `with_network()`, `with_uuid()`, etc.
+- `Network` — `Mainnet` (5 geographic endpoints) or `Custom` (your own URLs)
+- `TipStrategy` — `Fixed(lamports)`, `FetchFloor`, or `FetchFloorWithCap { min, max }`
+- `ConfirmPolicy` — how many times to poll and how long to wait between polls
+
+**Layer 2: Bundle Building** (`bundler/`)
+- `BundleBuilderInputs` — the 7 parameters needed to build a bundle
+- `BundleBuilder` — mutable state during construction (compaction, tip placement, LUT validation, compile + sign)
+- `BuiltBundle` — the immutable output artifact (signed transactions + metadata)
+- `BundleSlotView` — shared trait for querying slot occupancy (implemented by both builder and output)
+- `TipMode` — enum tracking whether tip was placed as a separate tx or inline
+
+**Layer 3: Client** (`client/`)
+- `JitoBundler` — facade that orchestrates the full lifecycle
+- `rpc.rs` — shared JSON-RPC utilities (send, parse, encode)
+- `send.rs` — endpoint retry across 5 geographic Jito block engines
+- `simulate.rs` — per-tx RPC simulation + atomic Helius `simulateBundle`
+- `status.rs` — on-chain signature polling + Jito API status polling
+
+Two standalone helpers also exist:
 
 - **TipHelper** (`tip.rs`) — Picks a random tip account from the 8 Jito accounts, creates the SOL transfer instruction, and fetches the current tip floor from Jito's API. `TipStrategy` controls whether the floor is used raw or capped.
 
-- **Bundle** (`bundler/bundle.rs`) — The core logic. Takes your instructions (via `BundleBuilderInputs`) and applies all the Jito rules: prepends compute budget, handles jitodontfront (frontrun protection), places the tip correctly, validates LUT safety, and checks transaction sizes.
+- **TransactionAnalysis** (`analysis.rs`) — Diagnostic utility for post-mortem debugging: which accounts aren't in your LUTs, which transactions are oversized. Used automatically on compile failures.
 
-- **Send methods** (`client/send.rs`) — `impl JitoBundler` methods that encode transactions to base64 and send them via JSON-RPC to Jito's block engine. If one endpoint fails, it tries the next. Jito has 5 geographic endpoints (mainnet, Amsterdam, Frankfurt, New York, Tokyo).
+## Data Flow: Build Pipeline
 
-- **Simulate methods** (`client/simulate.rs`) — `impl JitoBundler` methods that run your bundle through simulation before sending real SOL. Supports both per-transaction RPC simulation and Helius's atomic `simulateBundle` endpoint.
-
-- **Status methods** (`client/status.rs`) — `impl JitoBundler` methods that poll both the Jito API and Solana RPC to confirm your bundle actually landed. Handles rate limiting (429s), timeouts, and on-chain failures.
-
-This "split impl" pattern keeps each file focused on one concern while keeping all state access through `&self` — no passing around raw clients or config structs.
+```
+BundleBuilderInputs (7 fields)
+    │
+    ▼
+BundleBuilder::build()
+    │
+    ├─ 1. compact_transactions()     Remove gaps, preserve order
+    ├─ 2. validate count > 0         Reject empty bundles
+    ├─ 3. apply_jitodont_front()     Frontrun protection account
+    ├─ 4. Choose tip placement:
+    │     count < 5 → append_tip_transaction()   (TipMode::SeparateTx)
+    │     count = 5 → append_tip_instruction()   (TipMode::InlineLastTx)
+    ├─ 5. validate_tip_not_in_luts() Only for inline mode
+    └─ 6. build_versioned_transaction() per slot
+          ├─ Prepend compute budget ix
+          ├─ Compile v0 message (with or without LUTs)
+          ├─ Sign with payer
+          └─ Size check (≤ 1232 bytes)
+    │
+    ▼
+BuiltBundle (immutable output)
+    ├── transactions: Vec<VersionedTransaction>
+    ├── tip_account: Pubkey
+    ├── tip_lamports: u64
+    ├── tip_mode: TipMode
+    └── instruction_slots: BundleInstructionSlots
+```
 
 ## The Subtle Rules That Took Time to Get Right
 
@@ -50,6 +96,8 @@ This "split impl" pattern keeps each file focused on one concern while keeping a
 Jito allows max 5 transactions per bundle. If your bundle has fewer than 5 instructions, the tip goes into its own **separate transaction** compiled **without address lookup tables**. This avoids a subtle issue where the tip account might conflict with LUT entries.
 
 If your bundle already has exactly 5 instructions (the max), there's no room for a separate tip tx, so the tip instruction gets appended to the last transaction inline.
+
+The `TipMode` enum makes this explicit — you can inspect the built bundle to see which path was taken.
 
 ### Instruction Slot Compaction
 
@@ -75,6 +123,8 @@ Here's a non-obvious gotcha: if any of your address lookup tables contain a Jito
 | Own `SYSTEM_PROGRAM_ID` constant | `solana_sdk::system_program` is deprecated. Rather than adding `solana-system-interface`, we define the well-known pubkey directly |
 | No `jito-rust-rpc` dependency | That crate uses `anyhow`, `serde_json::Value`, old deps. The ~100 LOC of useful RPC logic was cheaper to rewrite with proper types |
 | Edition 2024 | Enables let-chains (`if let Some(x) = foo && condition {}`), which makes the bundle building code much cleaner |
+| `BundleSlotView` trait | Eliminates method duplication between builder and output — both need `populated_count()` and `last_populated_index()` |
+| Shared `rpc.rs` utilities | `send_json_rpc_request()`, `parse_json_rpc_result()`, `encode_transactions_base64()` are reused across send, simulate, and status |
 
 ## Code Structure
 
@@ -92,17 +142,25 @@ src/
 │   ├── confirm_policy.rs        ConfirmPolicy (max_attempts + interval_ms)
 │   └── tip_strategy.rs          TipStrategy (Fixed / FetchFloor / FetchFloorWithCap)
 ├── bundler/
-│   └── bundle.rs                Bundle struct + BundleBuilderInputs (core build logic)
+│   ├── types.rs                 BundleInstructionSlots, TipMode, BundleSlotView trait
+│   ├── builder/
+│   │   ├── types.rs             BundleBuilderInputs + BundleBuilder (mutable build state)
+│   │   └── utils.rs             Build pipeline implementation
+│   ├── bundle/
+│   │   └── types.rs             BuiltBundle (immutable output artifact)
+│   └── tests.rs                 16 unit tests for bundle building
 └── client/
+    ├── types.rs                 Private status response types
     ├── jito_bundler.rs          JitoBundler facade + BuildBundleOptions input struct
+    ├── rpc.rs                   impl JitoBundler — shared JSON-RPC utilities
     ├── send.rs                  impl JitoBundler — bundle submission with endpoint retry
     ├── simulate.rs              impl JitoBundler — RPC + Helius simulation
     └── status.rs                impl JitoBundler — landing confirmation polling
 ```
 
-Notice how `send.rs`, `simulate.rs`, and `status.rs` all add methods to the same `JitoBundler` struct via split `impl` blocks. This keeps files small and focused while keeping all resource access through `&self`.
+Notice how `send.rs`, `simulate.rs`, `status.rs`, and `rpc.rs` all add methods to the same `JitoBundler` struct via split `impl` blocks. This keeps files small and focused while keeping all resource access through `&self`.
 
-The facade exposes a clean flow: `fetch_tip()` → `build_bundle(BuildBundleOptions)` → `send_and_confirm()`. The `BuildBundleOptions` input struct follows the Rust convention of using a struct when there are more than three parameters.
+The facade exposes a clean flow: `fetch_tip()` -> `build_bundle(BuildBundleOptions)` -> `send_and_confirm()`. The `BuildBundleOptions` input struct follows the Rust convention of using a struct when there are more than three parameters.
 
 ## Bugs We Ran Into
 
@@ -110,9 +168,11 @@ The facade exposes a clean flow: `fetch_tip()` → `build_bundle(BuildBundleOpti
 
 2. **Solana crate version fragmentation**: You can't just write `solana-sdk = "2.3"` and expect everything to resolve. Different Solana crates have different latest 2.x versions: `solana-pubkey` is at 2.4.0, `solana-compute-budget-interface` is at 2.2.2. Pin exact versions.
 
-3. **`allow_attributes_without_reason = "deny"` strictness**: Our lint config denies `#[allow(...)]` without a `reason = "..."`. In test code, we use `#[allow(clippy::unwrap_used, reason = "test code")]`. In production code, we avoid `#[allow]` entirely and handle casts with explicit conditional logic.
+3. **`allow_attributes = "deny"` strictness**: Our lint config denies ALL `#[allow(...)]` attributes without a `reason = "..."`. In test code, we use `#[allow(clippy::unwrap_used, reason = "test code")]`. In production code, we avoid `#[allow]` entirely and handle casts with explicit conditional logic.
 
 4. **Deprecated `system_program` module**: Caught by a deprecation warning. The fix was defining our own `SYSTEM_PROGRAM_ID` constant via the `pubkey!` macro rather than pulling in yet another crate.
+
+5. **Duplicate structs during refactoring**: The original code had `Bundle` and `BundleBuilder` with identical fields. We split them into `BundleBuilder` (mutable build state) and `BuiltBundle` (immutable output) with distinct field sets. The `BundleSlotView` trait provides shared slot-querying methods.
 
 ## How Good Engineers Think About This
 
@@ -128,4 +188,8 @@ The facade exposes a clean flow: `fetch_tip()` → `build_bundle(BuildBundleOpti
 
 - **Input structs for clarity**: `BuildBundleOptions` and `BundleBuilderInputs` follow the convention of using a struct when a method has more than three parameters. The struct is fully destructured at the call site, ensuring every field is explicitly used — this makes it impossible to silently ignore a new field when the struct grows.
 
-- **Flat flow methods**: The top-level `send_and_confirm` reads like a recipe: simulate → send → log → wait → interpret. Each step is a single named call. Interpretation logic (the match on landing status) is extracted into a private `interpret_landing_status` helper so the orchestrating method stays scannable without scrolling.
+- **Flat flow methods**: The top-level `send_and_confirm` reads like a recipe: simulate -> send -> log -> wait -> interpret. Each step is a single named call. Interpretation logic (the match on landing status) is extracted into a private `interpret_landing_status` helper so the orchestrating method stays scannable without scrolling.
+
+- **Builder vs Output separation**: `BundleBuilder` accumulates mutable state during construction; `BuiltBundle` is the sealed result. This prevents accidental mutation after build and makes the API's intent clear — once you have a `BuiltBundle`, it's ready for simulation and submission.
+
+- **Shared RPC utilities**: `client/rpc.rs` extracts common JSON-RPC plumbing (send, parse, encode) so that `send.rs`, `simulate.rs`, and `status.rs` stay focused on their domain logic rather than duplicating HTTP/JSON handling.

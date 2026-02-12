@@ -10,6 +10,8 @@ use solana_pubkey::Pubkey;
 pub struct TipHelper;
 
 impl TipHelper {
+    const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
+
     // --- Tip Account / Instruction ---
     /// Picks a random Jito tip account from known constants.
     pub fn get_random_tip_account() -> Pubkey {
@@ -68,7 +70,7 @@ impl TipHelper {
             reason: "tip_floor returned an empty array".to_string(),
         })?;
 
-        let tip_in_lamports = Self::compute_tip_floor_lamports(tip_data);
+        let tip_in_lamports = Self::compute_tip_floor_lamports(tip_data)?;
 
         Ok((tip_in_lamports, tip_data.clone()))
     }
@@ -99,13 +101,27 @@ impl TipHelper {
     }
 
     /// Converts EMA 50th percentile SOL tip value into lamports.
-    fn compute_tip_floor_lamports(tip_data: &JitoTipFloorResponse) -> u64 {
-        let tip_float = (tip_data.ema_landed_tips_50th_percentile * 1e9).ceil();
-        if tip_float.is_sign_negative() || tip_float.is_nan() {
-            0u64
-        } else {
-            tip_float as u64
+    fn compute_tip_floor_lamports(tip_data: &JitoTipFloorResponse) -> Result<u64, JitoError> {
+        let ema_50th = tip_data.ema_landed_tips_50th_percentile;
+        if !ema_50th.is_finite() {
+            return Err(JitoError::TipFloorFetchFailed {
+                reason: format!("invalid tip floor value (non-finite): {ema_50th}"),
+            });
         }
+        if ema_50th < 0.0 {
+            return Err(JitoError::TipFloorFetchFailed {
+                reason: format!("invalid tip floor value (negative): {ema_50th}"),
+            });
+        }
+
+        let tip_float = (ema_50th * Self::LAMPORTS_PER_SOL).ceil();
+        if !tip_float.is_finite() || tip_float > u64::MAX as f64 {
+            return Err(JitoError::TipFloorFetchFailed {
+                reason: format!("tip floor value is out of range: {ema_50th} SOL"),
+            });
+        }
+
+        Ok(tip_float as u64)
     }
 
     /// Applies strategy transforms such as min/max clamping.
@@ -150,19 +166,37 @@ mod tests {
     fn fetch_floor_does_not_clamp_by_default() {
         let tip_data = make_tip_floor(20.0);
         let tip = TipHelper::compute_tip_floor_lamports(&tip_data);
-        assert_eq!(tip, 20_000_000_000);
+        assert!(
+            tip.is_ok(),
+            "expected valid tip floor conversion, got {tip:?}"
+        );
+        assert_eq!(tip.unwrap_or_default(), 20_000_000_000);
     }
 
-    /// Verifies invalid floor values are coerced to zero lamports.
+    /// Verifies invalid floor values return typed errors.
     #[test]
-    fn fetch_floor_negative_or_nan_returns_zero() {
+    fn fetch_floor_negative_or_nan_return_error() {
         let negative = make_tip_floor(-0.1);
-        let tip = TipHelper::compute_tip_floor_lamports(&negative);
-        assert_eq!(tip, 0);
+        assert!(
+            TipHelper::compute_tip_floor_lamports(&negative).is_err(),
+            "expected negative tip floor to be rejected"
+        );
 
         let nan = make_tip_floor(f64::NAN);
-        let tip = TipHelper::compute_tip_floor_lamports(&nan);
-        assert_eq!(tip, 0);
+        assert!(
+            TipHelper::compute_tip_floor_lamports(&nan).is_err(),
+            "expected NaN tip floor to be rejected"
+        );
+    }
+
+    /// Verifies infinite tip floors are rejected.
+    #[test]
+    fn fetch_floor_infinite_returns_error() {
+        let infinite = make_tip_floor(f64::INFINITY);
+        assert!(
+            TipHelper::compute_tip_floor_lamports(&infinite).is_err(),
+            "expected infinite tip floor to be rejected"
+        );
     }
 
     /// Verifies capped floor strategy applies both min and max bounds.

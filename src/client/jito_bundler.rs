@@ -132,7 +132,7 @@ impl JitoBundler {
         }
         let result = self.send_bundle(bundle).await?;
         tracing::info!(
-            "bundle submitted: bundle_id={:?}, signatures={:?}, explorer={:?}",
+            "bundle submitted: bundle_id={}, signatures={:?}, explorer={}",
             result.bundle_id,
             result.signatures,
             result.explorer_url

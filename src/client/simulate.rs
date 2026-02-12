@@ -13,7 +13,7 @@ impl JitoBundler {
     /// Simulates each transaction individually via standard Solana RPC.
     pub async fn simulate_per_transaction(&self, bundle: &BuiltBundle) -> Result<(), JitoError> {
         for (i, tx) in bundle.transactions.iter().enumerate() {
-            let sig = bs58::encode(&tx.signatures[0]).into_string();
+            let sig = Self::first_signature_base58(tx, i, "simulate_per_transaction")?;
             let config = RpcSimulateTransactionConfig {
                 sig_verify: true,
                 replace_recent_blockhash: false,

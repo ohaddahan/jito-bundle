@@ -48,7 +48,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let result = bundler.send_and_confirm(&bundle).await?;
-    println!("bundle landed: {:?}", result.bundle_id);
+    println!("bundle landed: {}", result.bundle_id);
     Ok(())
 }
 ```
@@ -150,7 +150,7 @@ fn handle(result: Result<(), JitoError>) {
 cargo test
 
 # Integration tests (requires .env with live credentials)
-cargo test -- --ignored
+cargo test --features live-tests -- --ignored
 ```
 
 ## License

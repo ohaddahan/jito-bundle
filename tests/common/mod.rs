@@ -100,16 +100,8 @@ pub fn print_bundle_result(test_name: &str, result: &BundleResult) {
     println!("  {test_name} — result");
     println!("{bar}");
 
-    let bundle_id = result.bundle_id.as_deref().unwrap_or("n/a");
-    println!("  bundle_id: {bundle_id}");
-    println!("  success:   {}", result.success);
-
-    if let Some(url) = &result.explorer_url {
-        println!("  explorer:  {url}");
-    }
-    if let Some(err) = &result.error {
-        println!("  error:     {err}");
-    }
+    println!("  bundle_id: {}", result.bundle_id);
+    println!("  explorer:  {}", result.explorer_url);
 
     let sigs = result.signatures.join(" | ");
     println!("  signatures: {sigs}");

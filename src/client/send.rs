@@ -13,25 +13,21 @@ impl JitoBundler {
         format!("{JITO_EXPLORER_URL}/{bundle_id}")
     }
 
-    /// Encodes versioned transactions as base64 strings.
-    pub fn encode_transactions(
+    /// Extracts base58 signatures from compiled transactions.
+    pub fn extract_signatures(
         transactions: &[VersionedTransaction],
     ) -> Result<Vec<String>, JitoError> {
-        Self::encode_transactions_base64(transactions)
-    }
-
-    /// Extracts base58 signatures from compiled transactions.
-    pub fn extract_signatures(transactions: &[VersionedTransaction]) -> Vec<String> {
         transactions
             .iter()
-            .map(|tx| bs58::encode(&tx.signatures[0]).into_string())
+            .enumerate()
+            .map(|(i, tx)| Self::first_signature_base58(tx, i, "send_bundle"))
             .collect()
     }
 
     /// Sends a built bundle with endpoint retry fallback.
     pub async fn send_bundle(&self, bundle: &BuiltBundle) -> Result<BundleResult, JitoError> {
         let encoded_txs = Self::encode_transactions_base64(&bundle.transactions)?;
-        let signatures = Self::extract_signatures(&bundle.transactions);
+        let signatures = Self::extract_signatures(&bundle.transactions)?;
         let endpoints = self.config.network.send_endpoints();
         let mut last_error = String::from("no endpoints available");
         for endpoint in &endpoints {
@@ -39,11 +35,9 @@ impl JitoBundler {
                 Ok(bundle_id) => {
                     let explorer_url = Self::get_jito_explorer_url(&bundle_id);
                     return Ok(BundleResult {
-                        success: true,
-                        bundle_id: Some(bundle_id),
-                        error: None,
+                        bundle_id,
                         signatures,
-                        explorer_url: Some(explorer_url),
+                        explorer_url,
                     });
                 }
                 Err(e) => {

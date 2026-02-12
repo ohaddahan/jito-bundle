@@ -63,6 +63,12 @@ impl JitoBundler {
         &self,
         signatures: &[String],
     ) -> Result<BundleStatus, JitoError> {
+        if signatures.is_empty() {
+            return Err(JitoError::InvalidSignature {
+                reason: "no signatures provided for confirmation".to_string(),
+            });
+        }
+
         let parsed_signatures: Vec<Signature> = signatures
             .iter()
             .map(|s| Signature::from_str(s))
@@ -73,42 +79,53 @@ impl JitoBundler {
         tokio::time::sleep(Duration::from_secs(DEFAULT_INITIAL_CONFIRM_DELAY_SECS)).await;
         let max_attempts = self.config.confirm_policy.max_attempts;
         let interval_ms = self.config.confirm_policy.interval_ms;
+        let mut had_successful_poll = false;
+        let mut last_rpc_error: Option<String> = None;
         for _attempt in 0..max_attempts {
-            if let Ok(statuses) = self
+            match self
                 .rpc_client
                 .get_signature_statuses(&parsed_signatures)
                 .await
             {
-                for (j, status) in statuses.value.iter().enumerate() {
-                    if let Some(s) = status
-                        && let Some(err) = &s.err
-                    {
-                        return Ok(BundleStatus::Failed {
-                            error: Some(format!("transaction {j} failed: {err:?}")),
-                        });
+                Ok(statuses) => {
+                    had_successful_poll = true;
+                    for (j, status) in statuses.value.iter().enumerate() {
+                        if let Some(s) = status
+                            && let Some(err) = &s.err
+                        {
+                            return Ok(BundleStatus::Failed {
+                                error: Some(format!("transaction {j} failed: {err:?}")),
+                            });
+                        }
+                    }
+                    let all_confirmed = statuses.value.iter().all(|status| {
+                        status.as_ref().is_some_and(|s| {
+                            s.confirmation_status.as_ref().is_some_and(|cs| {
+                                cs == &TransactionConfirmationStatus::Confirmed
+                                    || cs == &TransactionConfirmationStatus::Finalized
+                            })
+                        })
+                    });
+                    if all_confirmed {
+                        let slot = statuses
+                            .value
+                            .first()
+                            .and_then(|s| s.as_ref().map(|s| s.slot));
+                        return Ok(BundleStatus::Landed { slot });
                     }
                 }
-                let all_confirmed = statuses.value.iter().all(|status| {
-                    status.as_ref().is_some_and(|s| {
-                        s.confirmation_status.as_ref().is_some_and(|cs| {
-                            cs == &TransactionConfirmationStatus::Confirmed
-                                || cs == &TransactionConfirmationStatus::Finalized
-                        })
-                    })
-                });
-                if all_confirmed {
-                    let slot = statuses
-                        .value
-                        .first()
-                        .and_then(|s| s.as_ref().map(|s| s.slot));
-                    return Ok(BundleStatus::Landed { slot });
+                Err(e) => {
+                    tracing::warn!("get_signature_statuses poll failed: {e}");
+                    last_rpc_error = Some(e.to_string());
                 }
             }
             tokio::time::sleep(Duration::from_millis(interval_ms)).await;
         }
-        Err(JitoError::ConfirmationTimeout {
-            attempts: max_attempts,
-        })
+        Err(Self::polling_timeout_error(
+            max_attempts,
+            had_successful_poll,
+            last_rpc_error.as_deref(),
+        ))
     }
 
     /// Polls Jito bundle status endpoint until final status or timeout.
@@ -132,5 +149,54 @@ impl JitoBundler {
         Err(JitoError::ConfirmationTimeout {
             attempts: max_attempts,
         })
+    }
+
+    /// Converts polling terminal state into either timeout or actionable RPC error.
+    fn polling_timeout_error(
+        max_attempts: u32,
+        had_successful_poll: bool,
+        last_rpc_error: Option<&str>,
+    ) -> JitoError {
+        if had_successful_poll {
+            return JitoError::ConfirmationTimeout {
+                attempts: max_attempts,
+            };
+        }
+
+        let reason = match last_rpc_error {
+            Some(err) => {
+                format!("get_signature_statuses failed for all {max_attempts} attempts: {err}")
+            }
+            None => format!("get_signature_statuses failed for all {max_attempts} attempts"),
+        };
+        JitoError::Network { reason }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polling_timeout_error_returns_timeout_after_successful_polls() {
+        let err = JitoBundler::polling_timeout_error(10, true, Some("ignored"));
+        assert!(
+            matches!(err, JitoError::ConfirmationTimeout { attempts: 10 }),
+            "expected ConfirmationTimeout, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn polling_timeout_error_returns_network_when_all_polls_fail() {
+        let err = JitoBundler::polling_timeout_error(5, false, Some("rpc unavailable"));
+        assert!(
+            matches!(err, JitoError::Network { .. }),
+            "expected Network error, got {err:?}"
+        );
+        let err_text = err.to_string();
+        assert!(
+            err_text.contains("rpc unavailable"),
+            "expected error details to include RPC failure, got {err_text}"
+        );
     }
 }
