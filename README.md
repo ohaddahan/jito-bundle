@@ -105,16 +105,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 | `.with_jitodontfront(pubkey)` | Optional frontrun protection account |
 | `.with_compute_unit_limit(u32)` | Per-transaction compute budget |
 
-## Bundle Rules
+## Corner Cases and Rules We Enforce
 
-1. Max 5 transactions per bundle (hard Jito bundle limit).
-2. Slots are compacted before build (gaps removed, order preserved).
-3. `jitodontfront` is enforced only in the first transaction; existing `jitodontfront*` accounts are removed by prefix match because the suffix can vary.
-4. Tip instruction is always the final instruction of the final transaction.
-5. If bundle has fewer than 5 transactions, tip is added as a separate transaction (uses remaining capacity).
-6. If bundle already has 5 transactions, tip is appended inline to the last transaction (cannot add a 6th transaction).
-7. If the chosen tip account is present in a lookup table for inline mode, Jito bundle execution fails, so build rejects it.
-8. Compute budget instruction is prepended to every transaction.
+1. Bundle size is hard-capped at 5 transactions (Jito protocol limit).
+2. Empty bundles are rejected (`InvalidBundleSize`).
+3. Sparse input slots are compacted before build (gaps removed, order preserved).
+4. Tip is always inserted.
+5. If bundle has fewer than 5 transactions, tip is added as a separate transaction.
+6. If bundle already has 5 transactions, tip is appended inline to the last transaction.
+7. Tip instruction is always the last instruction of the final transaction.
+8. If the chosen tip account appears in a lookup table for inline mode, build rejects it (prevents Jito runtime failure).
+9. `jitodontfront` is enforced only in the first transaction; existing `jitodontfront*` accounts are removed by prefix match (suffix may vary).
+10. `jitodontfront` account duplication is prevented.
+11. Compute budget instruction is prepended to every transaction.
+12. Every compiled transaction is size-checked against Solana max transaction size.
 
 ## Error Handling
 
