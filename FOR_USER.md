@@ -53,6 +53,12 @@ Under the hood, `JitoBundler` is the single struct that owns all resources (HTTP
 - `simulate.rs` — per-tx RPC simulation + atomic Helius `simulateBundle`
 - `status.rs` — on-chain signature polling + Jito API status polling
 
+**Shared RPC utilities** (`client/rpc.rs`) provide four reusable building blocks:
+- `send_json_rpc_request()` — POST + body extraction
+- `parse_json_rpc_result()` — JSON-RPC result/error extraction
+- `encode_transactions_base64()` — serialize + base64
+- `first_signature_base58()` — safe signature extraction (returns `Result` instead of panicking on missing signatures)
+
 Two standalone helpers also exist:
 
 - **TipHelper** (`tip.rs`) — Picks a random tip account from the 8 Jito accounts, creates the SOL transfer instruction, and fetches the current tip floor from Jito's API. `TipStrategy` controls whether the floor is used raw or capped.
@@ -111,6 +117,14 @@ The `TipMode` enum makes this explicit — you can inspect the built bundle to s
 
 Here's a non-obvious gotcha: if any of your address lookup tables contain a Jito tip account, the transaction will **fail at runtime**. Why? Because LUT lookups produce references with different writability semantics than what the tip transfer needs. The library validates this upfront and gives you a clear error instead of letting you waste SOL on a doomed bundle.
 
+### Safe Signature Extraction
+
+Early versions accessed `tx.signatures[0]` directly — a panic if the vec is empty. The library now uses `first_signature_base58()` everywhere, which returns `Result<String, JitoError::InvalidSignature>`. This rippled through `extract_signatures()` (now returns `Result`) and `simulate_per_transaction()`.
+
+### Typed Tip Floor Errors
+
+`compute_tip_floor_lamports()` used to silently coerce invalid values (NaN, negative, overflow) to 0 lamports. Now it returns `Result<u64, JitoError::TipFloorFetchFailed>` with specific messages for non-finite, negative, and out-of-range values. You find out about bad data from the Jito API immediately instead of tipping 0 and wondering why your bundle got rejected.
+
 ### The jitodontfront Mechanism
 
 "jitodontfront" (Jito-don't-front) is frontrun protection. When enabled, the library adds a special pubkey to the first transaction's account list as a non-signer, non-writable account. This signals to Jito validators: "don't let anyone frontrun this bundle."
@@ -152,7 +166,7 @@ src/
 └── client/
     ├── types.rs                 Private status response types
     ├── jito_bundler.rs          JitoBundler facade + BuildBundleOptions input struct
-    ├── rpc.rs                   impl JitoBundler — shared JSON-RPC utilities
+    ├── rpc.rs                   impl JitoBundler — shared JSON-RPC + signature utilities
     ├── send.rs                  impl JitoBundler — bundle submission with endpoint retry
     ├── simulate.rs              impl JitoBundler — RPC + Helius simulation
     └── status.rs                impl JitoBundler — landing confirmation polling
@@ -174,6 +188,14 @@ The facade exposes a clean flow: `fetch_tip()` -> `build_bundle(BuildBundleOptio
 
 5. **Duplicate structs during refactoring**: The original code had `Bundle` and `BundleBuilder` with identical fields. We split them into `BundleBuilder` (mutable build state) and `BuiltBundle` (immutable output) with distinct field sets. The `BundleSlotView` trait provides shared slot-querying methods.
 
+6. **Silent coercion vs typed errors**: `compute_tip_floor_lamports()` originally returned 0 for NaN/negative values. A 0 tip means your bundle gets deprioritized with no obvious error. Switching to `Result` with typed `TipFloorFetchFailed` errors catches bad API data immediately.
+
+7. **Direct signature indexing**: `tx.signatures[0]` panics if there are no signatures. Extracting this into `first_signature_base58()` with a `Result` return made the entire send/simulate/status pipeline panic-free.
+
+8. **`BundleResult` over-engineering**: The original had `success: bool`, `bundle_id: Option<String>`, `error: Option<String>`, `explorer_url: Option<String>`. Since errors already propagate via `Result<BundleResult, JitoError>`, the `BundleResult` itself only needs the success fields: `bundle_id: String`, `signatures`, `explorer_url: String`. Simpler struct, no impossible states.
+
+9. **Polling timeout diagnostics**: `wait_for_landing_on_chain()` originally returned `ConfirmationTimeout` even when every single RPC poll failed (network issue, not timeout). Now it tracks `had_successful_poll` and returns `JitoError::Network` with the last RPC error when all polls fail — actionable error message instead of misleading "timeout".
+
 ## How Good Engineers Think About This
 
 - **Facade pattern**: `JitoBundler` presents a simple API while hiding the complexity of sending, simulating, and confirming bundles. Users don't need to know about endpoint rotation or simulation strategies.
@@ -192,4 +214,10 @@ The facade exposes a clean flow: `fetch_tip()` -> `build_bundle(BuildBundleOptio
 
 - **Builder vs Output separation**: `BundleBuilder` accumulates mutable state during construction; `BuiltBundle` is the sealed result. This prevents accidental mutation after build and makes the API's intent clear — once you have a `BuiltBundle`, it's ready for simulation and submission.
 
-- **Shared RPC utilities**: `client/rpc.rs` extracts common JSON-RPC plumbing (send, parse, encode) so that `send.rs`, `simulate.rs`, and `status.rs` stay focused on their domain logic rather than duplicating HTTP/JSON handling.
+- **Shared RPC utilities**: `client/rpc.rs` extracts common JSON-RPC plumbing (send, parse, encode, signature extraction) so that `send.rs`, `simulate.rs`, and `status.rs` stay focused on their domain logic rather than duplicating HTTP/JSON handling.
+
+- **Make impossible states unrepresentable**: `BundleResult` was redesigned from `{success: bool, bundle_id: Option, error: Option, explorer_url: Option}` to just `{bundle_id: String, signatures: Vec, explorer_url: String}`. Since the struct only exists inside `Ok(...)`, all fields are guaranteed present. No more checking `result.success` when you already handled the error.
+
+- **Distinguish error causes**: `wait_for_landing_on_chain()` tracks whether any RPC poll succeeded. If all polls fail → `JitoError::Network` (check your RPC). If polls succeeded but none confirmed → `ConfirmationTimeout` (bundle might still land). Same timeout, different root cause, different action.
+
+- **Offline tests**: The test suite now has `tests/offline/` with fast unit-level tests that don't need `.env` or network. CI runs these on every push. Live tests are gated behind `cfg(feature = "live-tests")` and only compile when you explicitly opt in.
