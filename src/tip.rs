@@ -1,7 +1,5 @@
 use crate::config::tip_strategy::TipStrategy;
-use crate::constants::{
-    JITO_TIP_ACCOUNTS, SYSTEM_PROGRAM_ID,
-};
+use crate::constants::{JITO_TIP_ACCOUNTS, SYSTEM_PROGRAM_ID};
 use crate::error::JitoError;
 use crate::types::JitoTipFloorResponse;
 use rand::Rng;
@@ -85,7 +83,10 @@ impl TipHelper {
                 let (tip, _) = Self::fetch_tip_floor(client, tip_floor_url).await?;
                 Ok(Self::apply_floor_strategy(
                     tip,
-                    &TipStrategy::FetchFloorWithCap { min: *min, max: *max },
+                    &TipStrategy::FetchFloorWithCap {
+                        min: *min,
+                        max: *max,
+                    },
                 ))
             }
         }

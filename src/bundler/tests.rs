@@ -1,8 +1,9 @@
 #[cfg(test)]
-mod tests {
+mod bundle_builder_tests {
     use crate::JitoError;
     use crate::bundler::builder::types::{BundleBuilder, BundleBuilderInputs};
-    use crate::bundler::bundle::types::Bundle;
+    use crate::bundler::bundle::types::BuiltBundle;
+    use crate::bundler::types::TipMode;
     use crate::constants::{JITO_TIP_ACCOUNTS, SOLANA_MAX_TX_SIZE, SYSTEM_PROGRAM_ID};
     use solana_instruction::{AccountMeta, Instruction};
     use solana_pubkey::Pubkey;
@@ -10,9 +11,9 @@ mod tests {
     use solana_sdk::hash::Hash;
     use solana_sdk::signature::{Keypair, Signer};
 
-    fn assert_build_ok(result: Result<Bundle<'_>, JitoError>) -> Bundle<'_> {
+    fn assert_build_ok(result: Result<BuiltBundle, JitoError>) -> BuiltBundle {
         match result {
-            Ok(b) => b,
+            Ok(bundle) => bundle,
             Err(e) => {
                 assert!(e.to_string().is_empty(), "build failed: {e}");
                 std::process::abort();
@@ -20,13 +21,13 @@ mod tests {
         }
     }
 
-    fn get_slot<'a>(bundle: &'a Bundle<'_>, index: usize) -> &'a Vec<Instruction> {
-        match &bundle.transactions_instructions[index] {
-            Some(ixs) => ixs,
-            None => {
-                assert!(false, "expected Some at slot {index}, got None");
-                std::process::abort();
-            }
+    fn get_slot(bundle: &BuiltBundle, index: usize) -> &Vec<Instruction> {
+        let slot = &bundle.instruction_slots()[index];
+        if let Some(ixs) = slot {
+            ixs
+        } else {
+            assert!(slot.is_some(), "expected Some at slot {index}, got None");
+            std::process::abort();
         }
     }
 
@@ -70,7 +71,7 @@ mod tests {
             tip,
         } = params;
         let pubkey = payer.pubkey();
-        let mut slots: [Option<Vec<Instruction>>; 5] = [None, None, None, None, None];
+        let mut slots = [None, None, None, None, None];
         for slot in slots.iter_mut().take(tx_count) {
             *slot = Some(vec![make_noop_instruction(&pubkey)]);
         }
@@ -134,8 +135,8 @@ mod tests {
             tip: 100_000,
         });
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
-        assert_eq!(bundle.versioned_transaction.len(), 2);
-        assert!(bundle.last_txn_is_tip);
+        assert_eq!(bundle.transactions.len(), 2);
+        assert!(matches!(bundle.tip_mode, TipMode::SeparateTx));
     }
 
     #[test]
@@ -150,8 +151,8 @@ mod tests {
             tip: 100_000,
         });
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
-        assert_eq!(bundle.versioned_transaction.len(), 5);
-        assert!(bundle.last_txn_is_tip);
+        assert_eq!(bundle.transactions.len(), 5);
+        assert!(matches!(bundle.tip_mode, TipMode::SeparateTx));
     }
 
     #[test]
@@ -166,8 +167,8 @@ mod tests {
             tip: 100_000,
         });
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
-        assert_eq!(bundle.versioned_transaction.len(), 5);
-        assert!(!bundle.last_txn_is_tip);
+        assert_eq!(bundle.transactions.len(), 5);
+        assert!(matches!(bundle.tip_mode, TipMode::InlineLastTx));
     }
 
     #[test]
@@ -220,7 +221,7 @@ mod tests {
             tip: 100_000,
         });
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
-        for (i, tx) in bundle.versioned_transaction.iter().enumerate() {
+        for (i, tx) in bundle.transactions.iter().enumerate() {
             let serialized = bincode::serialize(tx).unwrap_or_default();
             assert!(
                 serialized.len() <= SOLANA_MAX_TX_SIZE,
@@ -270,7 +271,7 @@ mod tests {
             tip: 100_000,
         });
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
-        assert!(bundle.last_txn_is_tip);
+        assert!(matches!(bundle.tip_mode, TipMode::SeparateTx));
         assert_eq!(bundle.populated_count(), 3);
         let tip_tx = get_slot(&bundle, 2);
         assert_eq!(tip_tx.len(), 1);
@@ -289,7 +290,7 @@ mod tests {
             tip: 100_000,
         });
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
-        assert!(!bundle.last_txn_is_tip);
+        assert!(matches!(bundle.tip_mode, TipMode::InlineLastTx));
         assert_eq!(bundle.populated_count(), 5);
         let last_tx = get_slot(&bundle, 4);
         let last_ix = &last_tx[last_tx.len() - 1];
@@ -331,7 +332,7 @@ mod tests {
         let last_idx = bundle.last_populated_index();
         assert!(last_idx.is_some(), "no populated slots found");
         let tip_tx = get_slot(&bundle, last_idx.unwrap_or(0));
-        let tip_ix = if bundle.last_txn_is_tip {
+        let tip_ix = if matches!(bundle.tip_mode, TipMode::SeparateTx) {
             &tip_tx[0]
         } else {
             &tip_tx[tip_tx.len() - 1]
@@ -382,14 +383,9 @@ mod tests {
             compute_unit_limit: 200_000,
         };
         let bundle = assert_build_ok(BundleBuilder::build(inputs));
-        let last_idx = match bundle.last_populated_index() {
-            Some(idx) => idx,
-            None => {
-                assert!(false, "no populated slots found");
-                std::process::abort();
-            }
-        };
-        let last_tx = get_slot(&bundle, last_idx);
+        let last_idx = bundle.last_populated_index();
+        assert!(last_idx.is_some(), "no populated slots found");
+        let last_tx = get_slot(&bundle, last_idx.unwrap_or(0));
         let last_ix = &last_tx[last_tx.len() - 1];
         assert_eq!(
             last_ix.program_id, SYSTEM_PROGRAM_ID,

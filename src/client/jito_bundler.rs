@@ -1,12 +1,12 @@
 use crate::bundler::builder::types::{BundleBuilder, BundleBuilderInputs};
-use crate::bundler::bundle::types::Bundle;
+use crate::bundler::bundle::types::BuiltBundle;
+use crate::bundler::types::BundleInstructionSlots;
 use crate::config::jito::JitoConfig;
 use crate::error::JitoError;
 use crate::tip::TipHelper;
 use crate::types::{BundleResult, BundleStatus, SimulateBundleValue};
 use reqwest::Client;
 use solana_client::nonblocking::rpc_client::RpcClient;
-use solana_instruction::Instruction;
 use solana_sdk::address_lookup_table::AddressLookupTableAccount;
 use solana_sdk::signer::keypair::Keypair;
 use std::time::Duration;
@@ -57,10 +57,10 @@ impl JitoBundler {
         TipHelper::resolve_tip(&self.http_client, tip_floor_url, &self.config.tip_strategy).await
     }
 
-    pub async fn build_bundle<'a>(
-        &'a self,
-        input: BuildBundleOptions<'a>,
-    ) -> Result<Bundle<'a>, JitoError> {
+    pub async fn build_bundle(
+        &self,
+        input: BuildBundleOptions<'_>,
+    ) -> Result<BuiltBundle, JitoError> {
         let BuildBundleOptions {
             payer,
             transactions_instructions,
@@ -86,7 +86,7 @@ impl JitoBundler {
 
     pub async fn simulate_helius(
         &self,
-        bundle: &Bundle<'_>,
+        bundle: &BuiltBundle,
     ) -> Result<SimulateBundleValue, JitoError> {
         let helius_url =
             self.config
@@ -98,7 +98,7 @@ impl JitoBundler {
         self.simulate_bundle_helius(bundle, helius_url).await
     }
 
-    pub async fn send_and_confirm(&self, bundle: &Bundle<'_>) -> Result<BundleResult, JitoError> {
+    pub async fn send_and_confirm(&self, bundle: &BuiltBundle) -> Result<BundleResult, JitoError> {
         if let Some(helius_url) = &self.config.helius_rpc_url
             && let Err(e) = self.simulate_bundle_helius(bundle, helius_url).await
         {
@@ -137,6 +137,6 @@ impl JitoBundler {
 
 pub struct BuildBundleOptions<'a> {
     pub payer: &'a Keypair,
-    pub transactions_instructions: [Option<Vec<Instruction>>; 5],
+    pub transactions_instructions: BundleInstructionSlots,
     pub lookup_tables: &'a [AddressLookupTableAccount],
 }

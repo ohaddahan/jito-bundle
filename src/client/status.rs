@@ -1,7 +1,8 @@
 use crate::client::jito_bundler::JitoBundler;
+use crate::client::types::StatusResult;
 use crate::constants::DEFAULT_INITIAL_CONFIRM_DELAY_SECS;
 use crate::error::JitoError;
-use crate::types::{BundleStatus, JsonRpcRequest, JsonRpcResponse};
+use crate::types::{BundleStatus, JsonRpcRequest};
 use serde::Deserialize;
 use solana_sdk::signature::Signature;
 use solana_transaction_status_client_types::TransactionConfirmationStatus;
@@ -17,45 +18,28 @@ impl JitoBundler {
             method: "getBundleStatuses",
             params: [[bundle_id]],
         };
-
-        let response = match self.jito_post(endpoint).json(&request).send().await {
-            Ok(r) => r,
+        let (status_code, response_text) = match self
+            .send_json_rpc_request(self.jito_post(endpoint), &request, "getBundleStatuses")
+            .await
+        {
+            Ok(result) => result,
             Err(_) => return BundleStatus::Unknown,
         };
-
-        let status_code = response.status();
         if status_code.as_u16() == 429 {
             return BundleStatus::Pending;
         }
         if !status_code.is_success() {
             return BundleStatus::Unknown;
         }
-
-        let response_text = match response.text().await {
-            Ok(t) => t,
+        let result: StatusResult = match Self::parse_json_rpc_result(
+            &response_text,
+            "getBundleStatuses",
+            "no result in getBundleStatuses response",
+        ) {
+            Ok(r) => r,
             Err(_) => return BundleStatus::Unknown,
         };
-
-        #[derive(Debug, Deserialize)]
-        struct BundleStatusValue {
-            confirmation_status: Option<String>,
-            slot: Option<u64>,
-            err: Option<serde_json::Value>,
-        }
-
-        #[derive(Debug, Deserialize)]
-        struct StatusResult {
-            value: Vec<BundleStatusValue>,
-        }
-
-        let parsed: JsonRpcResponse<StatusResult> = match serde_json::from_str(&response_text) {
-            Ok(p) => p,
-            Err(_) => return BundleStatus::Unknown,
-        };
-
-        if let Some(result) = parsed.result
-            && let Some(status) = result.value.first()
-        {
+        if let Some(status) = result.value.first() {
             if let Some(err) = &status.err {
                 return BundleStatus::Failed {
                     error: Some(err.to_string()),
@@ -70,7 +54,6 @@ impl JitoBundler {
 
             return BundleStatus::Pending;
         }
-
         BundleStatus::Unknown
     }
 
@@ -85,12 +68,9 @@ impl JitoBundler {
             .map_err(|e| JitoError::InvalidSignature {
                 reason: e.to_string(),
             })?;
-
         tokio::time::sleep(Duration::from_secs(DEFAULT_INITIAL_CONFIRM_DELAY_SECS)).await;
-
         let max_attempts = self.config.confirm_policy.max_attempts;
         let interval_ms = self.config.confirm_policy.interval_ms;
-
         for _attempt in 0..max_attempts {
             if let Ok(statuses) = self
                 .rpc_client
@@ -124,7 +104,6 @@ impl JitoBundler {
             }
             tokio::time::sleep(Duration::from_millis(interval_ms)).await;
         }
-
         Err(JitoError::ConfirmationTimeout {
             attempts: max_attempts,
         })
@@ -135,23 +114,18 @@ impl JitoBundler {
         bundle_id: &str,
     ) -> Result<BundleStatus, JitoError> {
         tokio::time::sleep(Duration::from_secs(DEFAULT_INITIAL_CONFIRM_DELAY_SECS)).await;
-
         let max_attempts = self.config.confirm_policy.max_attempts;
         let interval_ms = self.config.confirm_policy.interval_ms;
-
         for _attempt in 0..max_attempts {
             let status = self.get_bundle_status(bundle_id).await;
-
             match &status {
                 BundleStatus::Landed { .. } | BundleStatus::Failed { .. } => {
                     return Ok(status);
                 }
                 _ => {}
             }
-
             tokio::time::sleep(Duration::from_millis(interval_ms)).await;
         }
-
         Err(JitoError::ConfirmationTimeout {
             attempts: max_attempts,
         })

@@ -39,8 +39,8 @@ async fn build_memo_bundle_succeeds() {
         Err(_) => return,
     };
     common::print_bundle_info("build_memo_bundle", &bundle);
-    assert_eq!(bundle.versioned_transaction.len(), 3);
-    for (i, tx) in bundle.versioned_transaction.iter().enumerate() {
+    assert_eq!(bundle.transactions.len(), 3);
+    for (i, tx) in bundle.transactions.iter().enumerate() {
         let serialized = bincode::serialize(tx).unwrap_or_default();
         assert!(
             serialized.len() <= SOLANA_MAX_TX_SIZE,

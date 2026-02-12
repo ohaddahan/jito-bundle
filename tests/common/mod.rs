@@ -1,4 +1,5 @@
-use jito_bundle::bundler::bundle::types::Bundle;
+use jito_bundle::bundler::bundle::types::BuiltBundle;
+use jito_bundle::bundler::types::{BundleInstructionSlots, TipMode};
 use jito_bundle::config::jito::JitoConfig;
 use jito_bundle::config::network::Network;
 use jito_bundle::constants::DEFAULT_TIP_LAMPORTS;
@@ -6,7 +7,6 @@ use jito_bundle::types::BundleResult;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_pubkey::{Pubkey, pubkey};
 use solana_sdk::signature::Keypair;
-use solana_sdk::signer::Signer;
 use std::fs;
 use std::str::FromStr;
 
@@ -124,8 +124,8 @@ pub fn create_memo_instruction(payer: &Pubkey, message: &str) -> Instruction {
     }
 }
 
-pub fn build_memo_slots(payer: &Pubkey, messages: &[&str]) -> [Option<Vec<Instruction>>; 5] {
-    let mut slots: [Option<Vec<Instruction>>; 5] = [None, None, None, None, None];
+pub fn build_memo_slots(payer: &Pubkey, messages: &[&str]) -> BundleInstructionSlots {
+    let mut slots: BundleInstructionSlots = [None, None, None, None, None];
     for (i, msg) in messages.iter().enumerate().take(5) {
         slots[i] = Some(vec![create_memo_instruction(payer, msg)]);
     }
@@ -141,32 +141,33 @@ fn short_pubkey(pk: &Pubkey) -> String {
     }
 }
 
-pub fn print_bundle_info(test_name: &str, bundle: &Bundle<'_>) {
+pub fn print_bundle_info(test_name: &str, bundle: &BuiltBundle) {
     let bar = "━".repeat(56);
     println!("\n{bar}");
     println!("  {test_name}");
     println!("{bar}");
 
-    let tx_count = bundle.versioned_transaction.len();
-    let populated = bundle
-        .transactions_instructions
-        .iter()
-        .filter(|s| s.is_some())
-        .count();
+    let tx_count = bundle.transactions.len();
+    let populated = bundle.populated_count();
 
-    let bundle_id = bundle
-        .versioned_transaction
-        .first()
-        .map(|tx| bs58::encode(&tx.signatures[0]).into_string())
-        .unwrap_or_else(|| "n/a".to_string());
+    let bundle_id = bundle.transactions.first().map_or_else(
+        || "n/a".to_string(),
+        |tx| bs58::encode(&tx.signatures[0]).into_string(),
+    );
 
     println!("  bundle_id: {bundle_id}");
     println!("  transactions: {tx_count} versioned · {populated} instruction slots");
     println!("  tip_account: {}", short_pubkey(&bundle.tip_account));
-    println!("  last_txn_is_tip: {}", bundle.last_txn_is_tip);
-    println!("  payer: {}", short_pubkey(&bundle.payer.pubkey()));
+    println!(
+        "  tip_mode: {}",
+        if matches!(bundle.tip_mode, TipMode::SeparateTx) {
+            "separate"
+        } else {
+            "inline"
+        }
+    );
 
-    for (i, tx) in bundle.versioned_transaction.iter().enumerate() {
+    for (i, tx) in bundle.transactions.iter().enumerate() {
         let size = bincode::serialize(tx).map_or(0, |s| s.len());
         let sig = bs58::encode(&tx.signatures[0]).into_string();
         println!("  tx[{i}]: {sig} ({size} bytes)");
