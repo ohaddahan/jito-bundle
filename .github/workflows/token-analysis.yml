@@ -1,0 +1,15 @@
+name: Token Analysis
+on: [push]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ohaddahan/repo-token-analysis@v1.0.1
+        with:
+          threshold_percent: 75
+          top_n_offenders: 10
+          history_max_entries: 100
