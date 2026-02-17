@@ -1,0 +1,93 @@
+{
+  "timestamp": "2026-02-17T16:07:27.610Z",
+  "tokenizers": {
+    "code2prompt": 92223,
+    "repomix": 34954,
+    "tiktoken": 32663
+  },
+  "models": [
+    {
+      "name": "claude",
+      "context_size": 200000,
+      "tiktoken_tokens": 32663,
+      "percent_used": 16.33,
+      "status": "green"
+    },
+    {
+      "name": "gpt4",
+      "context_size": 128000,
+      "tiktoken_tokens": 32663,
+      "percent_used": 25.52,
+      "status": "green"
+    },
+    {
+      "name": "gemini",
+      "context_size": 1000000,
+      "tiktoken_tokens": 32663,
+      "percent_used": 3.27,
+      "status": "green"
+    }
+  ],
+  "threshold_percent": 75,
+  "diagnostics": {
+    "top_offenders": [
+      {
+        "file": "src/bundler/tests.rs",
+        "tokens": 4427,
+        "percent_of_smallest_model": 3.46
+      },
+      {
+        "file": "FOR_USER.md",
+        "tokens": 3923,
+        "percent_of_smallest_model": 3.06
+      },
+      {
+        "file": "CLAUDE.md",
+        "tokens": 2861,
+        "percent_of_smallest_model": 2.24
+      },
+      {
+        "file": "src/bundler/builder/utils.rs",
+        "tokens": 1913,
+        "percent_of_smallest_model": 1.49
+      },
+      {
+        "file": "src/tip.rs",
+        "tokens": 1857,
+        "percent_of_smallest_model": 1.45
+      },
+      {
+        "file": "src/client/status.rs",
+        "tokens": 1545,
+        "percent_of_smallest_model": 1.21
+      },
+      {
+        "file": "tests/common/mod.rs",
+        "tokens": 1513,
+        "percent_of_smallest_model": 1.18
+      },
+      {
+        "file": "src/client/jito_bundler.rs",
+        "tokens": 1462,
+        "percent_of_smallest_model": 1.14
+      },
+      {
+        "file": "src/types.rs",
+        "tokens": 1441,
+        "percent_of_smallest_model": 1.13
+      },
+      {
+        "file": "README.md",
+        "tokens": 1341,
+        "percent_of_smallest_model": 1.05
+      }
+    ],
+    "suggestions": [],
+    "trend": {
+      "previous_total": null,
+      "delta": null,
+      "delta_percent": null,
+      "fastest_growing": []
+    }
+  }
+}

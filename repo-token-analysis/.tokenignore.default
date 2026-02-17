@@ -1,0 +1,43 @@
+# Generated analysis output (prevents circular dependency)
+repo-token-analysis/
+
+# Dependencies & build artifacts
+node_modules/
+target/
+dist/
+build/
+.next/
+__pycache__/
+*.pyc
+vendor/
+
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Cargo.lock
+Gemfile.lock
+poetry.lock
+go.sum
+
+# Binary & media files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.svg
+*.woff
+*.woff2
+*.ttf
+*.eot
+*.mp3
+*.mp4
+*.zip
+*.tar.gz
+*.pdf
+
+# IDE & OS
+.idea/
+.vscode/
+.DS_Store
