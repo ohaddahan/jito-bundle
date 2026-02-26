@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-02-17T16:07:27.610Z",
+  "timestamp": "2026-02-20T11:25:17.511Z",
   "tokenizers": {
-    "code2prompt": 92223,
-    "repomix": 34954,
+    "code2prompt": 221349,
+    "repomix": 164461,
     "tiktoken": 32663
   },
   "models": [
@@ -84,9 +84,9 @@
     ],
     "suggestions": [],
     "trend": {
-      "previous_total": null,
-      "delta": null,
-      "delta_percent": null,
+      "previous_total": 32663,
+      "delta": 0,
+      "delta_percent": 0,
       "fastest_growing": []
     }
   }
